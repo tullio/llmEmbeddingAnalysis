@@ -10,6 +10,8 @@ from tqdm import tqdm
 import torch
 import torch.nn as nn
 from torch.nn.functional import cosine_similarity as cos_sim
+import textwrap
+import math
 
 from transformers import PreTrainedTokenizerFast
 from tokenizers import Tokenizer
@@ -78,13 +80,15 @@ os.environ["RWKV_CUDA_ON"] = '1' # '1' to compile CUDA kernel (10x faster), requ
 
 class rwkv():
     
-    def __init__(self, model_filename, tokenizer_filename):
+    def __init__(self, model_filename, tokenizer_filename, model_load = True):
         logger.info(f"initializing rwkv")
         self.model_filename = model_filename
-        self.model = model = RWKV(model=model_filename, strategy='cuda fp16i8')
+        if model_load:
+            self.model = RWKV(model=model_filename, strategy='cuda fp16i8')
+            self.pipeline = PIPELINE(self.model, tokenizer_filename) # 20B_tokenizer.json is in https://github.com/BlinkDL/ChatRWKV
+
         #self.tokenizer = PreTrainedTokenizerFast(tokenizer_file=tokenizer_filename)
         self.tokenizer = Tokenizer.from_file(tokenizer_filename)
-        self.pipeline = PIPELINE(self.model, tokenizer_filename) # 20B_tokenizer.json is in https://github.com/BlinkDL/ChatRWKV
         self.AVOID_REPEAT_TOKENS = []
         self.start = time.time()
 
@@ -116,10 +120,12 @@ class rwkv():
         self.enable_rwkvemb_cache = True
         self.enable_swemb_cache = True
         self.enable_pdemb_cache = True
+        self.enable_simmat_cache = True
         self.enable_pdemb_visualize = True
         self.data_top_dir = "./data"
         self.data_subdirs = ["carroll", "einstein", "lovecraft"]
         self.numTokensList = [1024, 2048, 4096]
+        self.topN = 10 # PDから取るベクトルの数
 
     def setDb(self, key, val):
         keyval = f"{self.key_prefix}:{key}"
@@ -172,11 +178,9 @@ class rwkv():
         if val == None:
             logger.debug(f"getDB({key}) is None. Rebuild Cache")
             embeddings = self.run_rnn(tokens)
-            logger.debug("set key=", key)
             self.setDb(key, embeddings)
             val = embeddings
             #print(embeddings[:30])
-            logger.debug("getDB after setDb key = ", key, "val =", self.getDb(key))
         else:
             logger.debug(f"RWKV embedding cache found")
         logger.debug(f"rwkv embedding shape={val.shape}")
@@ -199,8 +203,31 @@ class rwkv():
         else:
             logger.debug(f"SW embedding cache found")
         logger.debug(f"sliding window embedding shape={val.shape}")
-        return val    
+        return val
+    def getHeadPersistenceDiagramEmbeddings(self, file, numTokens):
+        emb = self.getPersistenceDiagramEmbeddings(file, numTokens) # [2, n]
+        lifeTime = emb[1, :] - emb[0, :]
+        #print("emb=", emb)
+        #print("lifeTime=", lifeTime)
+        #print("zip=",list(zip(lifeTime, emb)))
+        ##sorted_pairs = sorted(zip(lifeTime, emb), key=lambda pair: pair[0], reverse=True)
+        ##topN_lifeTime, topN_emb = zip(*sorted_pairs[:self.topN])
+        # Aの要素を降順にソートして上位5件のインデックスを取得
+        indices = np.argsort(lifeTime)[::-1][:self.topN]
 
+        # ソートされたAの上位5件の要素と対応するBの要素を取得
+        sorted_lifeTime = lifeTime[indices]
+        #print("sorted lifeTime=", sorted_lifeTime)
+        sorted_emb = emb[:, indices]
+        #print("sorted embeddings=", sorted_emb)
+        # 最後に，[2, n]のベクトル群を1次元に変換する
+        sorted_emb = sorted_emb.reshape(sorted_emb.shape[0]*sorted_emb.shape[1])
+        #print("reshaped embeddings=", sorted_emb)
+        #print("re-reshaped embeddings=", sorted_emb.reshape(2, -1))
+        return sorted_emb
+        
+
+    # 1次元のPDの2次元ベクトル列をnumpyで返す
     def getPersistenceDiagramEmbeddings(self, file, numTokens):
         key = f"{file.name}:tokens={numTokens}:pdemb"
         val = self.getDb(key)
@@ -245,9 +272,77 @@ class rwkv():
         return pd_emb
 
             
-    def getCosineSimilarity(list1, list2):
-        sim = 1 - spatial.distance.cosine(list1, list2)
+    def CosSim(self, list1, list2):
+        #print(type(list1).__name__)
+        if type(list1).__name__ == "Tensor":
+            sim = cos_sim(list1.reshape(1, -1), list2.reshape(1, -1)).item()
+        elif type(list1).__name__ == "list" or type(list1).__name__ == "ndarray":
+            sim = 1 - spatial.distance.cosine(list1, list2)
         return sim
+    def FIP(self, f, g):
+        if type(f).__name__ == "Tensor":
+            fip = torch.dot(f.view(-1), g.view(-1))
+        elif type(f).__name__ == "list" or type(f).__name__ == "ndarray":
+            fip = np.dot(f.ravel(), g.ravel())
+        return fip
+    def JFIP(self, f, g):
+        print(type(f).__name__)
+        if type(f).__name__ == "Tensor":
+            f = torch.cov(f)
+            g = torch.cov(g)
+            jfip = 2*self.FIP(f, g)/(self.FIP(f, f)+self.FIP(g, g))
+
+        elif type(f).__name__ == "list" or type(f).__name__ == "ndarray":
+
+            f = np.cov(f)
+            g = np.cov(g)
+            jfip = 2*self.FIP(f, g)/(self.FIP(f, f)+self.FIP(g, g))
+        return jfip
+
+    # getPersistenceDiagramEmbeddingsがbirth_death_times()で取った2次元ベクトル列を
+    # 返しちゃうので，そこからPDを再現したい
+    # from_birth_deathでいいのか
+    # getHeadPersistenceDiagramEmbeddingsは1次元に直しちゃう
+    # これは統一するか→getEmbeddingsシリーズのIF仕様なので，戻り地は1次元で
+    def Bottleneck(self, list1, list2):
+        sigma = 3.0
+        kernel_func = lambda x: np.exp(-x**2 / (2 * sigma**2))
+        if type(list1).__name__ == "Tensor":
+            sim = cos_sim(list1.reshape(1, -1), list2.reshape(1, -1)).item()
+        elif type(list1).__name__ == "list" or type(list1).__name__ == "ndarray":
+            list1 = list1.reshape(2, -1)
+            list2 = list2.reshape(2, -1)
+            pd1 = hc.PD.from_birth_death(1, list1[0, :], list1[1, :])
+            pd2 = hc.PD.from_birth_death(1, list2[0, :], list2[1, :])
+            dis = hc.distance.bottleneck(pd1, pd2)
+        sim = kernel_func(dis)
+        return sim
+
+    def simMatrixPlot(self, fig, matrix):
+        fig, ax = plt.subplots()
+        ax = fig.add_subplot(row, column, seq)
+        ax.invert_yaxis()
+        #cax=ax.imshow(matrix, cmap="Paired", origin="lower")
+        cax=ax.imshow(matrix, cmap="viridis", origin="upper")
+        cbar = fig.colorbar(cax)
+
+
+    def all_simMatixPlot(self):
+        fig = plt.figure()
+        embFuncList = [self.getRwkvEmbeddings, self.getHeadPersistenceDiagramEmbeddings]
+        simFuncList = [self.CosSim, self.JFIP, self.Bottleneck]
+        # self.numTokensList = [1024, 2048, 4096] # これはinitのを流用する
+        # この組み合わせだけど，rwkvにbottleneckとかないので，
+        # [rwkv, (cos, JFIP), [1024, 2048, 4096]) = 6,
+        # [rwkv->PD, (cos, JFIP, bottleneck), (1024 2048, 4096)] -> 9で15?
+        # 原稿を見ると15でビンゴ
+        # じゃあそれでいったん実装するか
+        embFunc = self.getRwkvEmbeddings
+        for simFunc in [self.CosSim, self.JFIP]:
+            for numTokens in self.numTokensList:
+                matrix = self.simMat(embFunc, simFunc, numTokens)
+                ax = fig.add_subplot(row, column, seq)
+                self.simMatrixPlot(fig, matrix, max_rows, max_cols, count)
 
     def pd_plot(self, file, numTokens):
         fig = None
@@ -260,9 +355,129 @@ class rwkv():
             ax.scatter(pd_emb[0], pd_emb[1])
             ax.set_title(f"file={file}, numTokens={numTokens}")
         return ax
+    def pd_subplot(self, fig, file, numTokens, row, column, seq):
+        ax = None
+        ### Visualize
+        if self.enable_pdemb_visualize is True:
+            pd_emb = self.getPersistenceDiagramEmbeddings(file, numTokens)
+            ax = fig.add_subplot(row, column, seq)
+            ax.scatter(pd_emb[0], pd_emb[1])
+            ax.set_title(textwrap.fill(f"file={file.name}, numTokens={numTokens}", 20), fontsize=8, wrap=True)
+        return ax
 
-    #def all_pd_plot(self):
+    def all_pd_plot(self):
+        iter = SourceFileIterator(self.data_top_dir, self.data_subdirs, self.numTokensList)
+        max_rows = len(self.data_subdirs)
+        max_cols = len(self.numTokensList)
+        out = next(iter, None)
+        count = 1
+        fig = plt.figure()
+        while out:
+            logger.info(out)
+            indexed_file = out[0]
+            file_index = indexed_file[0]
+            file = indexed_file[1]            
+            indexed_numTokens = out[1]
+            #print("indexed_numTokens=", indexed_numTokens)
+            numTokens_index = indexed_numTokens[0]
+            numTokens = indexed_numTokens[1]
+            with open(file, "r", encoding="utf-8") as f:
+                #print("file=", file)
+                self.pd_subplot(fig, f, numTokens, max_rows, max_cols, count)
+            count += 1
+            out = next(iter, None)
 
+    # get embeddings from the file descriptor of the output of the SourceFileIterator
+    def __getEmbeddingsFromFD(self, fd, getEmbFunc):
+        print("fd=", fd)
+        indexed_file = fd[0]
+        file_index = indexed_file[0]
+        file = indexed_file[1]            
+        indexed_numTokens = fd[1]
+        #print("indexed_numTokens=", indexed_numTokens1)
+        numTokens_index = indexed_numTokens[0]
+        numTokens = indexed_numTokens[1]
+        with open(file, "r", encoding="utf-8") as f:
+            #rwkv_emb1 = self.getRwkvEmbeddings(f1, numTokens1)
+            emb = getEmbFunc(f, numTokens)
+        return emb
+
+    """
+        getEmbFunc: getEwkvEmbeddings, getHeadPersistenceDiagramEmbeddings
+        simFUnc: getCosineSimilarity, JFIP, Bottleneck
+    """        
+    def simMat(self, getEmbFunc, simFunc, numTokens):
+        logger.info(f"embedding={getEmbFunc.__name__},"
+                    f"similarity={simFunc.__name__},"
+                    f" tokens={numTokens}")
+        key = f"{getEmbFunc.__name__}:{simFunc.__name__}:tokens={numTokens}:simMat"
+        print("key=", key)
+        val = self.getDb(key)
+        if val is None or self.enable_simmat_cache is False:
+            logger.debug(f"simMat cache not found")
+            simMat = self.getSimMatWithoutCache(getEmbFunc, simFunc, numTokens)
+            self.setDb(key, simMat)
+            val = simMat
+        else:
+            logger.debug(f"simMat cache found")
+        return val
+        
+
+    def getSimMatWithoutCache(self, getEmbFunc, simFunc, numTokens):
+        #iter1 = SourceFileIterator(self.data_top_dir, self.data_subdirs, self.numTokensList)
+        iter1 = SourceFileIterator(self.data_top_dir, self.data_subdirs, [numTokens])
+        logger.debug(f"subdirs={self.data_subdirs}")
+        max_rows = len(self.data_subdirs)
+        # max_cols = len(self.numTokensList)
+        #output_lens = max_rows*max_cols # 一辺がこのサイズの類似度行列になる想定
+        output_lens = len(self.data_subdirs)  # 一辺がこのサイズの類似度行列になる想定
+        out1 = next(iter1, None)
+        count = 1
+        fig = plt.figure()
+        simMatList = []
+        while out1:
+            logger.info(out1)
+            rwkv_emb1 = self.__getEmbeddingsFromFD(out1, getEmbFunc)
+
+            #iter2 = SourceFileIterator(self.data_top_dir, self.data_subdirs, self.numTokensList)
+            iter2 = SourceFileIterator(self.data_top_dir, self.data_subdirs, [numTokens])
+            out2 = next(iter2, None)
+            while out2:
+                logger.info(out2)
+                    #rwkv_emb2 = self.getRwkvEmbeddings(f2, numTokens2)
+                rwkv_emb2 = self.__getEmbeddingsFromFD(out2, getEmbFunc)
+                #sim = self.getCosineSimilarity(rwkv_emb1, rwkv_emb2)
+                sim = simFunc(rwkv_emb1, rwkv_emb2)
+                logger.info(f"{out1},{out2}, sim={sim}")
+                out2 = next(iter2, None)
+                simMatList.append(sim)
+                count += 1
+                logger.debug(f"count={count}")
+            out1 = next(iter1, None)
+        item = simMatList[0]
+        print("item=", type(item).__name__)
+        if type(item).__name__ == "Tensor":
+            simMat = torch.tensor(simMatList).reshape(int(math.sqrt(count)), int(math.sqrt(count)))
+        elif type(item).__name__ == "list"\
+          or type(item).__name__ == "float"\
+          or type(item).__name__ == "int"\
+          or type(item).__name__ == "float64":
+            simMat = np.array(simMatList).reshape(int(math.sqrt(count)), int(math.sqrt(count)))
+        return simMat
+
+            
+    def get_simMatrix(self, simFunc, targetVecList):
+        logger.info(f"creating simMatrix...func={simFunc}")
+        simList = []
+        for i in targetVecList:
+            for j in targetVecList:
+                sim = simFunc(i, j)
+                simList.append(sim)
+        simMatrix = np.array(simList).reshape(len(targetVecList), len(targetVecList))
+        logger.info(simMatrix)
+        return simMatrix
+                
+                
     """
     def getEmbeddingDataset(self):
         for subdir in self.data_subdirs:
@@ -296,18 +511,27 @@ class rwkv():
             file_index = indexed_file[0]
             file = indexed_file[1]            
             indexed_numTokens = out[1]
-            print("indexed_numTokens=", indexed_numTokens)
+            #print("indexed_numTokens=", indexed_numTokens)
             numTokens_index = indexed_numTokens[0]
             numTokens = indexed_numTokens[1]
             with open(file, "r", encoding="utf-8") as f:
-                print("file=", file)
+                #print("file=", file)
                 embeddings = self.getEmbeddings(f, numTokens)
                 #print("embed shape=", embeddings.shape)
             out = next(iter, None)
             
-    #def getCosineSimilarityMatrixFromRwkv(self, file, numTokens):
-        
-        
+
+    def getSimilarityMatrixDataset(self, cache = True):
+        if cache is False:
+            self.enable_simmat_cache = False
+        logger.info("Construct similarity matrix dataset and cache them")
+        for numTokens in self.numTokensList:
+            sim = self.simMat(self.getRwkvEmbeddings, self.CosSim, numTokens)
+            sim = self.simMat(self.getRwkvEmbeddings, self.JFIP, numTokens)
+            sim = self.simMat(self.getHeadPersistenceDiagramEmbeddings,
+                              self.CosSim, numTokens)
+            sim = self.simMat(self.getHeadPersistenceDiagramEmbeddings,
+                              self.Bottleneck, numTokens)
         
     def close(self):
         self.db.close()

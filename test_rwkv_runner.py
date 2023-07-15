@@ -4,6 +4,7 @@ import torch
 import logging
 from logging import config
 from custom_formatter import CustomFormatter
+import numpy as np
 
 config.fileConfig("logging.conf")
 
@@ -25,7 +26,8 @@ tokenizer_name = '20B_tokenizer.json'
 
 
 logger.info(f"unittest initialize")
-r = rwkv(model_name, tokenizer_name)
+r = rwkv(model_name, tokenizer_name, model_load = False)
+#r = rwkv(model_name, tokenizer_name, model_load = True)
 text = "Hello, World"
 tmpfilename = "tmp.txt"
 with open(tmpfilename, "w") as f:
@@ -54,8 +56,79 @@ class TestRwkvRunner(unittest.TestCase):
             vec = r.getPersistenceDiagramEmbeddings(f, numTokens)
             logger.info(f"vec={vec}")
             self.assertEqual(vec.shape, torch.Size([2, 147349]))
+    def test_getHeadPersistenceDiagramEmbeddings(self):
+        np.set_printoptions(suppress=True)
+        numTokens = 3
+        with open(tmpfilename, "r") as f:
+            vec = r.getHeadPersistenceDiagramEmbeddings(f, numTokens)
+            logger.info(f"vec={vec}, shape={vec.shape}")
+            self.assertEqual(vec.shape, torch.Size([2*r.topN]))
     def test_getEmbeddingDataset(self):
         r.getEmbeddingDataset()
+    def test_getCosineSimilarity(self):
+        sim = r.CosSim([1, 2], [2, 1])
+        self.assertEqual(sim, 0.8)
+        sim = r.CosSim(torch.tensor([1.0, 2.0]), torch.tensor([2.0, 1.0]))
+        np.testing.assert_almost_equal(sim, 0.8, decimal=4)
+    def test_FIP(self):
+        sim = r.FIP(np.array([1, 2]), np.array([2, 1]))
+        print(sim)
+        self.assertEqual(sim, 4)
+    def test_JFIP(self):
+        sim = r.JFIP(np.array([1, 2]), np.array([2, 1]))
+        print(sim)
+        self.assertEqual(sim, 1)
+        sim = r.JFIP(np.array([1, 2]), np.array([-2, 1]))
+        print(sim)
+        np.testing.assert_almost_equal(sim, 0.2195, decimal=4)
+
+    def test_Bottleneck(self):
+        sim1 = r.Bottleneck(np.array([[1, 2], [1, 3]]), np.array([[1, 2], [1, 3]]))
+        print("most high", sim1)
+        self.assertEqual(sim1, 1)
+        sim2 = r.Bottleneck(np.array([[1, 2], [1, 3]]), np.array([[1, 2], [1, 4]]))
+        print("middle", sim2)
+        sim3 = r.Bottleneck(np.array([[1, 2], [1, 3]]), np.array([[1, 2], [1, 5]]))
+        print("most low", sim3)
+        #np.testing.assert_almost_equal(sim, 0.3246, decimal=4)
+        #np.testing.assert_almost_equal(sim2 - sim1, 0.3246, decimal=4)
+        self.assertGreater(sim1, sim2)
+        self.assertGreater(sim2, sim3)
+
+
+        
+    def test_get_simMatrix(self):
+        simMatrix = r.get_simMatrix(r.CosSim, [[1, 2], [1, 2], [2, 1]])
+        np.testing.assert_array_equal(simMatrix, np.array([[1.0, 1.0, 0.8], [1.0, 1.0, 0.8], [0.8, 0.8, 1.0]]))
+        print("simMatrix=", simMatrix)
+        r.simMatrixPlot(simMatrix)
+
+    def test_simMatByCos(self):
+        sim = r.simMat(r.getRwkvEmbeddings, r.CosSim, 2048)
+        print(sim)
+
+    def test_plotSimMatByCos(self):
+        mat = r.simMat(r.getRwkvEmbeddings, r.CosSim, 2048)
+        r.simMatrixPlot(mat)
+
+    def test_simMatByJFIP(self):
+        sim = r.simMat(r.getRwkvEmbeddings, r.JFIP, 2048)
+        print(sim)
+
+    def test_PDsimMatByJFIP(self):
+        sim = r.simMat(r.getHeadPersistenceDiagramEmbeddings, r.JFIP, 2048)
+        print(sim)
+
+    def test_PDsimMatByCos(self):
+        sim = r.simMat(r.getHeadPersistenceDiagramEmbeddings, r.CosSim, 2048)
+        print(sim)
+
+    def test_PDsimMatByBottleneck(self):
+        sim = r.simMat(r.getHeadPersistenceDiagramEmbeddings, r.Bottleneck, 2048)
+        print(sim)
+    def test_getSimilarityMatrixDataset(self):
+        #r.getSimilarityMatrixDataset(cache = False)
+        r.getSimilarityMatrixDataset()
         
 if __name__ == "__main__":
     unittest.main()
