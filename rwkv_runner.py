@@ -120,6 +120,7 @@ class rwkv():
         self.enable_rwkvemb_cache = True
         self.enable_swemb_cache = True
         self.enable_pdemb_cache = True
+
         self.enable_simmat_cache = True
         self.enable_pdemb_visualize = True
         self.data_top_dir = "./data"
@@ -140,8 +141,9 @@ class rwkv():
         #global model_tokens, model_state
         model_tokens = []
         model_state = None
-
+        #logger.debug(f"input tokens={tokens}")
         tokens = [int(x) for x in tokens]
+        #logger.debug(f"tokens={tokens}")
         model_tokens += tokens
 
         while len(tokens) > 0:
@@ -167,15 +169,38 @@ class rwkv():
         tokens = self.tokenizer.encode(text).ids
         #print("tokens=", tokens)
         return tokens
+
+    def removeGutenbergComments(self, text):
+        start_line = "START OF THE PROJECT GUTENBERG EBOOK"
+        end_line = "END OF THE PROJECT GUTENBERG EBOOK"
+        lines = []
+
+        # 特定の文字列を含む行の範囲を抽出
+        should_extract = False
+        for line in text.split('\n'):
+            if should_extract:
+                if end_line in line:
+                    break
+                lines.append(line.strip())
+            elif start_line in line:
+                should_extract = True
+
+        return '\n'.join(lines)
+
+    
     def getRwkvEmbeddings(self, file, numTokens):
+        logger.debug(f"file={file}")
         text = file.read()
-        #print("text=", text)
+        file.seek(0)
+        #logger.debug(f"raw text={text[0:200]}")
+        text = self.removeGutenbergComments(text)
+        #print("ETLed text=", text[0:200])
         #embeddign = rwkv_embeddings(text)
         tokens = self.encoding(text)[:numTokens]
-       
+        #logger.debug(f"tokens={tokens}")
         key = f"{file.name}:tokens={numTokens}:rwkvemb"
         val = self.getDb(key)
-        if val == None:
+        if val == None or self.enable_rwkvemb_cache is False:
             logger.debug(f"getDB({key}) is None. Rebuild Cache")
             embeddings = self.run_rnn(tokens)
             self.setDb(key, embeddings)
@@ -256,14 +281,25 @@ class rwkv():
     # 言語モデルのベクトル
     # Sliding Window埋め込み
     # パーシステンスホモロジーの2次元ベクトル
-    def getEmbeddings(self, file, numTokens):
+    def getEmbeddings(self, file, numTokens, cache_rebuild = False):
         logger.info(f"Start getEmbeddings: file={file}, numTokens={numTokens}")
+
+        self.enable_rwkvemb_cache = not cache_rebuild
+
         ### 言語モデルのベクトル
         rwkv_emb = self.getRwkvEmbeddings(file, numTokens)
-        
+
+        # 一度作り直したら，キャッシュを使う
+        self.enable_rwkvemb_cache = True
+        # こっちはこれから作り直す
+        self.enable_swemb_cache = not cache_rebuild
         ### Sliding Window
         sw_emb = self.getSlidingWindowEmbeddings(file, numTokens)
         
+        # 一度作り直したら，キャッシュを使う
+        self.enable_swemb_cache = True
+        # こっちはこれから作り直す
+        self.enable_pdemb_cache = not cache_rebuild
 
         ### Persistence Diagram
         pd_emb = self.getPersistenceDiagramEmbeddings(file, numTokens)
@@ -318,17 +354,20 @@ class rwkv():
         sim = kernel_func(dis)
         return sim
 
-    def simMatrixPlot(self, fig, matrix):
-        fig, ax = plt.subplots()
-        ax = fig.add_subplot(row, column, seq)
+    def simMatrixPlot(self, fig, ax, matrix):
+
         ax.invert_yaxis()
         #cax=ax.imshow(matrix, cmap="Paired", origin="lower")
         cax=ax.imshow(matrix, cmap="viridis", origin="upper")
         cbar = fig.colorbar(cax)
 
 
-    def all_simMatixPlot(self):
-        fig = plt.figure()
+    def all_simMatrixPlot(self):
+        fig = plt.figure(figsize=(10, 6))
+        fig.subplots_adjust(hspace=0.9, wspace=0.2)
+        fig.tight_layout(rect=[0,0,1,0.96])
+        max_cols = 4 # 論文の図から
+        max_rows = 4 # 縦は定めなくてどんどん増えてもいいんだけど，subplotの仕様上仕方がない
         embFuncList = [self.getRwkvEmbeddings, self.getHeadPersistenceDiagramEmbeddings]
         simFuncList = [self.CosSim, self.JFIP, self.Bottleneck]
         # self.numTokensList = [1024, 2048, 4096] # これはinitのを流用する
@@ -337,13 +376,64 @@ class rwkv():
         # [rwkv->PD, (cos, JFIP, bottleneck), (1024 2048, 4096)] -> 9で15?
         # 原稿を見ると15でビンゴ
         # じゃあそれでいったん実装するか
+        seq = 1
         embFunc = self.getRwkvEmbeddings
         for simFunc in [self.CosSim, self.JFIP]:
             for numTokens in self.numTokensList:
                 matrix = self.simMat(embFunc, simFunc, numTokens)
-                ax = fig.add_subplot(row, column, seq)
-                self.simMatrixPlot(fig, matrix, max_rows, max_cols, count)
+                column = seq % max_cols + 1
+                row = seq // max_cols + 1
+                title = f"raw:{simFunc.__name__}({numTokens})"
+                ax = fig.add_subplot(max_rows, max_cols, seq)
+                ax.set_title(title, fontsize = 8)
+                self.simMatrixPlot(fig, ax, matrix)
+                seq += 1
+        embFunc = self.getHeadPersistenceDiagramEmbeddings
+        for simFunc in [self.CosSim, self.JFIP, self.Bottleneck]:
+            for numTokens in self.numTokensList:
+                matrix = self.simMat(embFunc, simFunc, numTokens)
+                column = seq % max_cols + 1
+                row = seq // max_cols + 1
+                title = f"TDA:{simFunc.__name__}({numTokens})"
+                ax = fig.add_subplot(max_rows, max_cols, seq)
+                ax.set_title(title, fontsize = 8)
+                self.simMatrixPlot(fig, ax, matrix)                
+                seq += 1
+        
+    def all_simMatrixDescribe(self):
 
+        embFuncList = [self.getRwkvEmbeddings, self.getHeadPersistenceDiagramEmbeddings]
+        simFuncList = [self.CosSim, self.JFIP, self.Bottleneck]
+        # self.numTokensList = [1024, 2048, 4096] # これはinitのを流用する
+        # この組み合わせだけど，rwkvにbottleneckとかないので，
+        # [rwkv, (cos, JFIP), [1024, 2048, 4096]) = 6,
+        # [rwkv->PD, (cos, JFIP, bottleneck), (1024 2048, 4096)] -> 9で15?
+        # 原稿を見ると15でビンゴ
+        # じゃあそれでいったん実装するか
+        seq = 1
+        embFunc = self.getRwkvEmbeddings
+        for simFunc in [self.CosSim, self.JFIP]:
+            for numTokens in self.numTokensList:
+                matrix = self.simMat(embFunc, simFunc, numTokens)
+                column = seq % max_cols + 1
+                row = seq // max_cols + 1
+                title = f"raw:{simFunc.__name__}({numTokens})"
+                ax = fig.add_subplot(max_rows, max_cols, seq)
+                ax.set_title(title, fontsize = 8)
+                self.simMatrixPlot(fig, ax, matrix)
+                seq += 1
+        embFunc = self.getHeadPersistenceDiagramEmbeddings
+        for simFunc in [self.CosSim, self.JFIP, self.Bottleneck]:
+            for numTokens in self.numTokensList:
+                matrix = self.simMat(embFunc, simFunc, numTokens)
+                column = seq % max_cols + 1
+                row = seq // max_cols + 1
+                title = f"TDA:{simFunc.__name__}({numTokens})"
+                ax = fig.add_subplot(max_rows, max_cols, seq)
+                ax.set_title(title, fontsize = 8)
+                self.simMatrixPlot(fig, ax, matrix)                
+                seq += 1
+        
     def pd_plot(self, file, numTokens):
         fig = None
         ax = None
@@ -421,8 +511,39 @@ class rwkv():
         else:
             logger.debug(f"simMat cache found")
         return val
-        
+    # 類似度の詳細情報を得る
+    def getSimDescWithoutCache(self, getEmbFunc, simFunc, numTokens):
+        #iter1 = SourceFileIterator(self.data_top_dir, self.data_subdirs, self.numTokensList)
+        iter1 = SourceFileIterator(self.data_top_dir, self.data_subdirs, [numTokens])
+        logger.debug(f"subdirs={self.data_subdirs}")
+        max_rows = len(self.data_subdirs)
+        # max_cols = len(self.numTokensList)
+        #output_lens = max_rows*max_cols # 一辺がこのサイズの類似度行列になる想定
+        output_lens = len(self.data_subdirs)  # 一辺がこのサイズの類似度行列になる想定
+        out1 = next(iter1, None)
+        count = 1
+        fig = plt.figure()
+        while out1:
+            #logger.info(out1)
+            rwkv_emb1 = self.__getEmbeddingsFromFD(out1, getEmbFunc)
 
+            #iter2 = SourceFileIterator(self.data_top_dir, self.data_subdirs, self.numTokensList)
+            iter2 = SourceFileIterator(self.data_top_dir, self.data_subdirs, [numTokens])
+            out2 = next(iter2, None)
+            while out2:
+                #logger.info(out2)
+                    #rwkv_emb2 = self.getRwkvEmbeddings(f2, numTokens2)
+                rwkv_emb2 = self.__getEmbeddingsFromFD(out2, getEmbFunc)
+                #sim = self.getCosineSimilarity(rwkv_emb1, rwkv_emb2)
+                sim = simFunc(rwkv_emb1, rwkv_emb2)
+                logger.info(f"{out1},{out2}, sim={sim}")
+                out2 = next(iter2, None)
+                count += 1
+                logger.debug(f"count={count}")
+            out1 = next(iter1, None)
+
+
+    
     def getSimMatWithoutCache(self, getEmbFunc, simFunc, numTokens):
         #iter1 = SourceFileIterator(self.data_top_dir, self.data_subdirs, self.numTokensList)
         iter1 = SourceFileIterator(self.data_top_dir, self.data_subdirs, [numTokens])
@@ -502,7 +623,7 @@ class rwkv():
                         embeddings = self.getEmbeddings(f, numTokens)
                         #print("embed shape=", embeddings.shape)
     """
-    def getEmbeddingDataset(self):
+    def getEmbeddingDataset(self, cache_rebuild = False):
         iter = SourceFileIterator(self.data_top_dir, self.data_subdirs, self.numTokensList)
         out = next(iter, None)
         while out:
@@ -516,7 +637,7 @@ class rwkv():
             numTokens = indexed_numTokens[1]
             with open(file, "r", encoding="utf-8") as f:
                 #print("file=", file)
-                embeddings = self.getEmbeddings(f, numTokens)
+                embeddings = self.getEmbeddings(f, numTokens, cache_rebuild)
                 #print("embed shape=", embeddings.shape)
             out = next(iter, None)
             

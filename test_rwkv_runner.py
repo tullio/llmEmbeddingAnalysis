@@ -64,7 +64,8 @@ class TestRwkvRunner(unittest.TestCase):
             logger.info(f"vec={vec}, shape={vec.shape}")
             self.assertEqual(vec.shape, torch.Size([2*r.topN]))
     def test_getEmbeddingDataset(self):
-        r.getEmbeddingDataset()
+        # もとのテキストデータにETL加えて全部作り直すようなとき
+        r.getEmbeddingDataset(cache_rebuild = False)
     def test_getCosineSimilarity(self):
         sim = r.CosSim([1, 2], [2, 1])
         self.assertEqual(sim, 0.8)
@@ -129,7 +130,10 @@ class TestRwkvRunner(unittest.TestCase):
     def test_getSimilarityMatrixDataset(self):
         #r.getSimilarityMatrixDataset(cache = False)
         r.getSimilarityMatrixDataset()
-        
+
+    def test_getSimDescWithoutCache(self):
+        r.getSimDescWithoutCache(r.getRwkvEmbeddings, r.CosSim, 1024)
+
 if __name__ == "__main__":
     unittest.main()
 
