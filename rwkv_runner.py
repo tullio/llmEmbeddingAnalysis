@@ -128,6 +128,9 @@ class rwkv():
         self.numTokensList = [1024, 2048, 4096]
         self.topN = 10 # PDから取るベクトルの数
 
+        # ディレクトリ情報から自動生成したい
+        self.cl = [0, 0, 0, 1, 1, 1, 2, 2, 2]  # インデックスが属するクラスタID情報
+
     def setDb(self, key, val):
         keyval = f"{self.key_prefix}:{key}"
         
@@ -653,6 +656,28 @@ class rwkv():
                               self.CosSim, numTokens)
             sim = self.simMat(self.getHeadPersistenceDiagramEmbeddings,
                               self.Bottleneck, numTokens)
-        
+
+    def hit(self, i, j, simMat):
+        hit = 0
+        k = self.cl[i]
+        l = self.cl[j]
+        if k == l and simMat[i, j] >= 0.5:
+            hit = 1
+        elif k == l and simMat[i, j] < 0.5:
+            hit = 0
+        elif k != l and simMat[i, j] < 0.5:
+            hit = 1
+        elif k != l and simMat[i, j] >= 0.5:
+            hit = 0
+        return hit
+    
+    def getScore(self, simMat):
+        n = simMat.shape[0]
+        score = 0
+        for i in range(n):
+            for j in range(n):
+                score += self.hit(i, j, simMat)
+        return score/(n*n)
+    
     def close(self):
         self.db.close()

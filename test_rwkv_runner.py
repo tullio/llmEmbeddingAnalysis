@@ -134,6 +134,43 @@ class TestRwkvRunner(unittest.TestCase):
     def test_getSimDescWithoutCache(self):
         r.getSimDescWithoutCache(r.getRwkvEmbeddings, r.CosSim, 1024)
 
+    def test_getScore(self):
+        simMatrix = r.get_simMatrix(r.CosSim, [[1, 2], [1, 2], [2, 1]])
+        np.testing.assert_array_equal(simMatrix, np.array([[1.0, 1.0, 0.8], [1.0, 1.0, 0.8], [0.8, 0.8, 1.0]]))
+        print("simMatrix=", simMatrix)
+        r.cl = [0, 0, 1]
+        score = r.getScore(simMatrix)
+        print(score)
+
+        simMatrix = np.array([[1.0, 1.0, 0.0], [1.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+        score = r.getScore(simMatrix)
+        self.assertEqual(score, 1.0)
+
+        simMatrix = np.array([[0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [1.0, 1.0, 0.0]])
+        score = r.getScore(simMatrix)
+        self.assertEqual(score, 0.0)
+
+        # 1つだめ
+        simMatrix = np.array([[1.0, 1.0, 0.6], [1.0, 1.0, 0.0], [0.6, 0.0, 1.0]])
+        score = r.getScore(simMatrix)
+        print(score)
+        np.testing.assert_almost_equal(score, 0.778, decimal=3)
+
+        # 2つだめ
+        simMatrix = np.array([[1.0, 4.0, 0.6], [0.4, 1.0, 0.0], [0.6, 0.0, 1.0]])
+        score = r.getScore(simMatrix)
+        print(score)
+        np.testing.assert_almost_equal(score, 0.667, decimal=3)
+
+        # 3つだめ
+        # 対角は固定とすると，これが最低スコア
+        simMatrix = np.array([[1.0, 4.0, 0.6], [0.4, 1.0, 0.6], [0.6, 0.6, 1.0]])
+        score = r.getScore(simMatrix)
+        print(score)
+        np.testing.assert_almost_equal(score, 0.444, decimal=3)
+
+
+
 if __name__ == "__main__":
     unittest.main()
 
