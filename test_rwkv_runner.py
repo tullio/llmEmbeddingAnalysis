@@ -169,6 +169,9 @@ class TestRwkvRunner(unittest.TestCase):
         print(score)
         np.testing.assert_almost_equal(score, 0.444, decimal=3)
 
+    def test_getAllScore(self):
+        scoreArray = r.getAllScores()
+        print(scoreArray)
 
 
 if __name__ == "__main__":

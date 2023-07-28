@@ -129,8 +129,22 @@ class rwkv():
         self.topN = 10 # PDから取るベクトルの数
 
         # ディレクトリ情報から自動生成したい
-        self.cl = [0, 0, 0, 1, 1, 1, 2, 2, 2]  # インデックスが属するクラスタID情報
+        self.cl = [0, 0, 0, 0, 0,
+                   1, 1, 1, 1, 1,
+                   2, 2, 2, 2, 2]  # インデックスが属するクラスタID情報
 
+
+        # Dataset作成用パラメータ
+        self.datasetParameters = [
+            [self.getRwkvEmbeddings, self.CosSim],
+            [self.getRwkvEmbeddings, self.JFIP],
+            [self.getHeadPersistenceDiagramEmbeddings,
+                              self.CosSim],
+            [self.getHeadPersistenceDiagramEmbeddings,
+                              self.JFIP],
+            [self.getHeadPersistenceDiagramEmbeddings,
+                              self.Bottleneck]
+            ]
     def setDb(self, key, val):
         keyval = f"{self.key_prefix}:{key}"
         
@@ -649,13 +663,21 @@ class rwkv():
         if cache is False:
             self.enable_simmat_cache = False
         logger.info("Construct similarity matrix dataset and cache them")
-        for numTokens in self.numTokensList:
-            sim = self.simMat(self.getRwkvEmbeddings, self.CosSim, numTokens)
-            sim = self.simMat(self.getRwkvEmbeddings, self.JFIP, numTokens)
-            sim = self.simMat(self.getHeadPersistenceDiagramEmbeddings,
-                              self.CosSim, numTokens)
-            sim = self.simMat(self.getHeadPersistenceDiagramEmbeddings,
-                              self.Bottleneck, numTokens)
+        for embedding, similarity in self.datasetParameters:
+            for numTokens in self.numTokensList:
+                sim = self.simMat(embedding, similarity, numTokens)
+
+    def getAllScores(self, cache = True):
+        scoreArray = []
+        if cache is False:
+            self.enable_simmat_cache = False
+        logger.info("Construct similarity matrix dataset and cache them")
+        for embedding, similarity in self.datasetParameters:
+            for numTokens in self.numTokensList:
+                sim = self.simMat(embedding, similarity, numTokens)
+                score = self.getScore(sim)
+                scoreArray.append(score)
+        return scoreArray
 
     def hit(self, i, j, simMat):
         hit = 0
