@@ -13,6 +13,10 @@ from torch.nn.functional import cosine_similarity as cos_sim
 import textwrap
 import math
 
+import sys
+#sys.path.append("../ChatRWKV")
+from rwkv_tokenizer import rwkv_tokenizer
+
 from transformers import PreTrainedTokenizerFast
 from tokenizers import Tokenizer
 
@@ -78,6 +82,8 @@ import shelve
 os.environ['RWKV_JIT_ON'] = '1'
 os.environ["RWKV_CUDA_ON"] = '1' # '1' to compile CUDA kernel (10x faster), requires c++ compiler & cuda libraries
 
+CharRWKV_HOME = "/research/ChatRWKV"
+
 class rwkv():
     
     def __init__(self, model_filename, tokenizer_filename, model_load = True):
@@ -88,16 +94,19 @@ class rwkv():
             self.pipeline = PIPELINE(self.model, tokenizer_filename) # 20B_tokenizer.json is in https://github.com/BlinkDL/ChatRWKV
 
         #self.tokenizer = PreTrainedTokenizerFast(tokenizer_file=tokenizer_filename)
+        #self.tokenizer = Tokenizer.from_file(tokenizer_filename)
         self.tokenizer = Tokenizer.from_file(tokenizer_filename)
+        print(self.tokenizer.__class__)
+        self.tokenizer = rwkv_tokenizer("rwkv_vocab_v20230424.txt")
         self.AVOID_REPEAT_TOKENS = []
         self.start = time.time()
 
-
-        self.AVOID_REPEAT = '，。：？！'
-        for i in self.AVOID_REPEAT:
-            dd = self.tokenizer.encode(i).ids
-            assert len(dd) == 1
-            self.AVOID_REPEAT_TOKENS += dd
+        if self.tokenizer.__class__ == "tokenizers.Tokenizer":
+            self.AVOID_REPEAT = '，。：？！'
+            for i in self.AVOID_REPEAT:
+                dd = self.tokenizer.encode(i).ids
+                assert len(dd) == 1
+                self.AVOID_REPEAT_TOKENS += dd
         self.CHUNK_LEN: int = 8192*4
         """Batch size for prompt processing."""
 
@@ -183,9 +192,11 @@ class rwkv():
         logger.info(f"run_rnn elapsed = {end - start}")
         return out
     def encoding(self, text):
-        tokens = self.tokenizer.encode(text).ids
-        #print("tokens=", tokens)
-        return tokens
+        enc = self.tokenizer.encode(text)
+        tokenIds = enc.ids
+        tokens = enc.tokens
+        print("tokens=", tokens)
+        return tokenIds
 
     def removeGutenbergComments(self, text):
         start_line = "START OF THE PROJECT GUTENBERG EBOOK"
