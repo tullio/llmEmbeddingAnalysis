@@ -12,6 +12,7 @@ import torch.nn as nn
 from torch.nn.functional import cosine_similarity as cos_sim
 import textwrap
 import math
+from params import params
 
 import sys
 #sys.path.append("../ChatRWKV")
@@ -118,7 +119,8 @@ class rwkv():
         #self.key_prefix = self.__class__.__name__ + '_' + str(id(self)) + '_' + model_filename
         self.key_prefix = self.__class__.__name__ + ':' + model_filename
         print("key_prefix=", self.key_prefix)
-        filename = "rwkv_gutenberg.db"
+        #filename = "rwkv_gutenberg.db"
+        filename = params.cache_filename
         self.db = shelve.open(filename)
 
         embedding_dimension_periodic = 3
@@ -153,11 +155,11 @@ class rwkv():
             [self.getRwkvEmbeddings, self.CosSim],
             [self.getRwkvEmbeddings, self.JFIP],
             [self.getHeadPersistenceDiagramEmbeddings,
-                              self.CosSim],
+             self.CosSim],
             [self.getHeadPersistenceDiagramEmbeddings,
-                              self.JFIP],
+             self.JFIP],
             [self.getHeadPersistenceDiagramEmbeddings,
-                              self.Bottleneck]
+             self.Bottleneck]
             ]
 
     def getCacheKey(self, keyName, tokenizer, targetFile, numTokens, getEmbFunc, simFunc):
@@ -217,8 +219,8 @@ class rwkv():
         enc = self.tokenizer.encode(text)
         tokenIds = enc.ids
         tokens = enc.tokens
-        print("token Ids=", tokenIds)
-        print("tokens=", tokens)
+        logger.debug(f"token Ids={tokenIds}")
+        logger.debug(f"tokens={tokens}")
         return tokenIds
 
     def removeGutenbergComments(self, text):
@@ -246,9 +248,9 @@ class rwkv():
         logger.info(f"file={file}")
         text = file.read()
         file.seek(0)
-        logger.info(f"raw text={text[0:200]}")
+        logger.debug(f"raw text={text[0:200]}")
         text = self.removeGutenbergComments(text)
-        print("ETLed text=", text[0:200])
+        logger.debug(f"ETLed text={text[0:200]}")
         #embeddign = rwkv_embeddings(text)
         tokens = self.encoding(text)[:numTokens]
         logger.debug(f"tokens={tokens}")
@@ -257,18 +259,22 @@ class rwkv():
         key = self.getCacheKey("rwkvemb", self.tokenizer, file, numTokens, None, None)
         val = self.getDb(key)
         if self.enable_rwkvemb_cache:
-           if val == None:
-               logger.debug(f"getDB({key}) is None. Rebuild Cache")
-               embeddings = self.run_rnn(tokens)
-               self.setDb(key, embeddings)
-               val = embeddings
-               #print(embeddings[:30])
-           else:
-               logger.debug(f"getDB({key}) found the cache value")
+            if val == None:
+                logger.info(f"getDB({key}) is None. Rebuild Cache")
+                if hasattr(self, "model"):
+                    embeddings = self.run_rnn(tokens)
+                else:
+                    logger.error("LLM model was not loaded. Cannot continue")
+                    raise NameError("LLM model was not loaded. Cannot continue")
+                self.setDb(key, embeddings)
+                val = embeddings
+                #print(embeddings[:30])
+            else:
+                logger.info(f"getDB({key}) found the cache value")
         else:
-           logger.debug(f"Cache access is disabled")
-           embeddings = self.run_rnn(tokens)
-           val = embeddings
+            logger.info(f"Cache access is disabled")
+            embeddings = self.run_rnn(tokens)
+            val = embeddings
         logger.debug(f"rwkv embedding shape={val.shape}")
         return val
 
