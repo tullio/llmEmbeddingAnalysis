@@ -97,16 +97,21 @@ class rwkv():
         #self.tokenizer = Tokenizer.from_file(tokenizer_filename)
         self.tokenizer = Tokenizer.from_file(tokenizer_filename)
         print(self.tokenizer.__class__)
-        self.tokenizer = rwkv_tokenizer("rwkv_vocab_v20230424.txt")
+        #self.tokenizer = rwkv_tokenizer("rwkv_vocab_v20230424.txt")
         self.AVOID_REPEAT_TOKENS = []
         self.start = time.time()
 
+
+        print("tokenizer class=", self.tokenizer.__class__)
         if self.tokenizer.__class__ == "tokenizers.Tokenizer":
             self.AVOID_REPEAT = '，。：？！'
             for i in self.AVOID_REPEAT:
                 dd = self.tokenizer.encode(i).ids
                 assert len(dd) == 1
                 self.AVOID_REPEAT_TOKENS += dd
+        elif self.tokenizer.__class__ == 'rwkv_tokenizer.rwkv_tokenizer':
+            None
+            
         self.CHUNK_LEN: int = 8192*4
         """Batch size for prompt processing."""
 
@@ -154,6 +159,23 @@ class rwkv():
             [self.getHeadPersistenceDiagramEmbeddings,
                               self.Bottleneck]
             ]
+
+    def getCacheKey(self, keyName, tokenizer, targetFile, numTokens, getEmbFunc, simFunc):
+        key = ""
+        if tokenizer is not None:
+            key += f":tokenizer={tokenizer.__class__.__name__}"
+        if targetFile is not None:
+            key += f":file={targetFile.name}"
+        if getEmbFunc is not None:
+            key += f":getEmb={getEmbFunc.__name__}"
+        if simFunc is not None:
+            key += f":simFunc={simFunc.__name__}"
+        if numTokens is not None:
+            key += f":tokens={numTokens}"
+
+        key += f":{keyName}"
+        return key
+    
     def setDb(self, key, val):
         keyval = f"{self.key_prefix}:{key}"
         
@@ -195,6 +217,7 @@ class rwkv():
         enc = self.tokenizer.encode(text)
         tokenIds = enc.ids
         tokens = enc.tokens
+        print("token Ids=", tokenIds)
         print("tokens=", tokens)
         return tokenIds
 
@@ -213,34 +236,45 @@ class rwkv():
             elif start_line in line:
                 should_extract = True
 
+        if should_extract is False:
+            lines = text.split('\n')
+            
         return '\n'.join(lines)
 
     
     def getRwkvEmbeddings(self, file, numTokens):
-        logger.debug(f"file={file}")
+        logger.info(f"file={file}")
         text = file.read()
         file.seek(0)
-        #logger.debug(f"raw text={text[0:200]}")
+        logger.info(f"raw text={text[0:200]}")
         text = self.removeGutenbergComments(text)
-        #print("ETLed text=", text[0:200])
+        print("ETLed text=", text[0:200])
         #embeddign = rwkv_embeddings(text)
         tokens = self.encoding(text)[:numTokens]
-        #logger.debug(f"tokens={tokens}")
-        key = f"{file.name}:tokens={numTokens}:rwkvemb"
+        logger.debug(f"tokens={tokens}")
+        ## key = f"{file.name}:tokens={numTokens}:rwkvemb" # old
+        #key = self.getCacheKey("rwkvemb", None, file, numTokens, None, None)
+        key = self.getCacheKey("rwkvemb", self.tokenizer, file, numTokens, None, None)
         val = self.getDb(key)
-        if val == None or self.enable_rwkvemb_cache is False:
-            logger.debug(f"getDB({key}) is None. Rebuild Cache")
-            embeddings = self.run_rnn(tokens)
-            self.setDb(key, embeddings)
-            val = embeddings
-            #print(embeddings[:30])
+        if self.enable_rwkvemb_cache:
+           if val == None:
+               logger.debug(f"getDB({key}) is None. Rebuild Cache")
+               embeddings = self.run_rnn(tokens)
+               self.setDb(key, embeddings)
+               val = embeddings
+               #print(embeddings[:30])
+           else:
+               logger.debug(f"getDB({key}) found the cache value")
         else:
-            logger.debug(f"RWKV embedding cache found")
+           logger.debug(f"Cache access is disabled")
+           embeddings = self.run_rnn(tokens)
+           val = embeddings
         logger.debug(f"rwkv embedding shape={val.shape}")
         return val
 
     def getSlidingWindowEmbeddings(self, file, numTokens):
-        key = f"{file.name}:tokens={numTokens}:swemb"
+        # key = f"{file.name}:tokens={numTokens}:swemb" # old
+        key = self.getCacheKey("swemb", None, file, numTokens, None, None)
         val = self.getDb(key)
         #logging.info(f"sliding window cache={val}")
         if val is None or self.enable_swemb_cache is False:
@@ -282,7 +316,8 @@ class rwkv():
 
     # 1次元のPDの2次元ベクトル列をnumpyで返す
     def getPersistenceDiagramEmbeddings(self, file, numTokens):
-        key = f"{file.name}:tokens={numTokens}:pdemb"
+        # key = f"{file.name}:tokens={numTokens}:pdemb" # old
+        key = self.getCacheKey("pdemb", None, file, numTokens, None, None)
         val = self.getDb(key)
         #logger.info(f"sliding window cache={val}")
         if val is None or self.enable_pdemb_cache is False:
@@ -528,7 +563,8 @@ class rwkv():
         logger.info(f"embedding={getEmbFunc.__name__},"
                     f"similarity={simFunc.__name__},"
                     f" tokens={numTokens}")
-        key = f"{getEmbFunc.__name__}:{simFunc.__name__}:tokens={numTokens}:simMat"
+        # key = f"{getEmbFunc.__name__}:{simFunc.__name__}:tokens={numTokens}:simMat" # old
+        key = self.getCacheKey("rwkvemb", None, None, numTokens, getEmbFunc, simFunc)
         print("key=", key)
         val = self.getDb(key)
         if val is None or self.enable_simmat_cache is False:
