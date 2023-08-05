@@ -3,6 +3,12 @@ import os
 import numpy as np
 import pandas as pd
 from sentence_transformers import SentenceTransformer
+
+# set these before import RWKV
+os.environ['RWKV_JIT_ON'] = '1'
+os.environ["RWKV_CUDA_ON"] = '1' # '1' to compile CUDA kernel (10x faster), requires c++ compiler & cuda libraries
+
+
 from rwkv.model import RWKV
 from rwkv.utils import PIPELINE, PIPELINE_ARGS
 from scipy import spatial
@@ -79,9 +85,6 @@ logger = logging.getLogger(__name__)
 
 import shelve
 
-# set these before import RWKV
-os.environ['RWKV_JIT_ON'] = '1'
-os.environ["RWKV_CUDA_ON"] = '1' # '1' to compile CUDA kernel (10x faster), requires c++ compiler & cuda libraries
 
 CharRWKV_HOME = "/research/ChatRWKV"
 
@@ -323,26 +326,38 @@ class rwkv():
     # 1次元のPDの2次元ベクトル列をnumpyで返す
     def getPersistenceDiagramEmbeddings(self, file, numTokens):
         # key = f"{file.name}:tokens={numTokens}:pdemb" # old
-        key = self.getCacheKey("pdemb", None, file, numTokens, None, None)
+        #key = self.getCacheKey("pdemb", None, file, numTokens, None, None)
+        key = self.getCacheKey("pdemb", self.tokenizer, file, numTokens, None, None)
         val = self.getDb(key)
         #logger.info(f"sliding window cache={val}")
-        if val is None or self.enable_pdemb_cache is False:
-            logger.debug(f"getDB({key}) is None. Rebuild Cache")
+        if self.enable_pdemb_cache:
+            if val is None:
+                logger.debug(f"getDB({key}) is None. Rebuild Cache")
+                sw_emb = self.getSlidingWindowEmbeddings(file, numTokens)
+                logger.debug(f"input sw emg shape={sw_emb.shape}")
+                hc.PDList.from_alpha_filtration(sw_emb, 
+                                    save_to="pointcloud.pdgm",
+                                    save_boundary_map=True)
+                pdlist = hc.PDList("pointcloud.pdgm")
+                pd1 = pdlist.dth_diagram(1)
+                pd_embeddings = np.array(pd1.birth_death_times())
+
+                logger.debug(f"set key={key}")
+                self.setDb(key, pd_embeddings)
+
+                val = pd_embeddings
+            else:
+                logger.debug(f"PD embedding cache({key}) found")
+        else:
+            logger.info(f"Cache access is disabled")
             sw_emb = self.getSlidingWindowEmbeddings(file, numTokens)
-            logger.debug(f"input sw emg shape={sw_emb.shape}")
             hc.PDList.from_alpha_filtration(sw_emb, 
-                                save_to="pointcloud.pdgm",
-                                save_boundary_map=True)
+                                    save_to="pointcloud.pdgm",
+                                    save_boundary_map=True)
             pdlist = hc.PDList("pointcloud.pdgm")
             pd1 = pdlist.dth_diagram(1)
             pd_embeddings = np.array(pd1.birth_death_times())
-
-            logger.debug(f"set key={key}")
-            self.setDb(key, pd_embeddings)
-            
-            val = pd_embeddings
-        else:
-            logger.debug(f"PD embedding cache found")
+            val = pd_embeddings            
         logger.debug(f"Persistence Diagram embedding shape={val.shape}")
         return val
 
@@ -515,6 +530,7 @@ class rwkv():
             ax.set_title(f"file={file}, numTokens={numTokens}")
         return ax
     def pd_subplot(self, fig, file, numTokens, row, column, seq):
+        logger.debug(f"row={row}, column={column}")
         ax = None
         ### Visualize
         if self.enable_pdemb_visualize is True:
@@ -524,13 +540,28 @@ class rwkv():
             ax.set_title(textwrap.fill(f"file={file.name}, numTokens={numTokens}", 20), fontsize=8, wrap=True)
         return ax
 
+    def count_source_files(self):
+        iter = SourceFileIterator(self.data_top_dir, self.data_subdirs, self.numTokensList)
+        out = next(iter, None)
+        filename_set = set()
+        while out:
+            indexed_filename = out[0]
+            filename = indexed_filename[1]
+            filename_set.add(filename)
+            out = next(iter, None)
+        count = len(filename_set)
+        return count
+            
     def all_pd_plot(self):
         iter = SourceFileIterator(self.data_top_dir, self.data_subdirs, self.numTokensList)
-        max_rows = len(self.data_subdirs)
+        print("data_subdirs=", self.data_subdirs)
+        print("numTokensList=", self.numTokensList)
+        #max_rows = len(self.data_subdirs) * 2
+        max_rows = self.count_source_files()
         max_cols = len(self.numTokensList)
         out = next(iter, None)
         count = 1
-        fig = plt.figure()
+        fig = plt.figure(figsize=[10,20])
         while out:
             logger.info(out)
             indexed_file = out[0]

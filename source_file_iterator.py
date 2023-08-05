@@ -35,13 +35,19 @@ class SourceFileIterator():
         #files = os.listdir(dir)
         files = glob.glob(f"{dir}/*")
         logger.debug(f"all files in {dir}={files}")
-        indexed_files = enumerate(files)
+        indexed_files = enumerate(files) # (index, filename)
         self.file_iter = iter(indexed_files)
     def init_numTokens(self):
         indexed_numTokensList = enumerate(self.numTokensList)
         self.numTokens_iter = iter(indexed_numTokensList)
         
     def __next__(self):
+        """
+        returns:
+        (indexed file, indexed numTokens)
+        # indexed file = (index, filename)
+        # indexed numTokens = (index, numTokens)
+        """
         out = None
         indexed_numTokens = next(self.numTokens_iter, None)
         logger.debug(f"numTokens_iter return={indexed_numTokens}")
@@ -74,3 +80,4 @@ class SourceFileIterator():
 
                     
         return out
+
