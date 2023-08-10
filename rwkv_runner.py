@@ -83,7 +83,8 @@ logger = logging.getLogger(__name__)
 #logger.addHandler(ch)
 
 
-import shelve
+#import shelve
+import diskcache
 
 
 CharRWKV_HOME = "/research/ChatRWKV"
@@ -124,7 +125,9 @@ class rwkv():
         print("key_prefix=", self.key_prefix)
         #filename = "rwkv_gutenberg.db"
         filename = params.cache_filename
-        self.db = shelve.open(filename)
+        logger.info(f"cache_filename={params.cache_filename}")
+        #self.db = shelve.open(filename)
+        self.db = diskcache.Cache(filename)
 
         embedding_dimension_periodic = 3
         embedding_time_delay_periodic = 1
@@ -144,8 +147,10 @@ class rwkv():
         self.enable_pdemb_visualize = True
         self.data_top_dir = "./data"
         self.data_subdirs = ["carroll", "einstein", "lovecraft"]
-        self.numTokensList = [1024, 2048, 4096]
-        self.topN = 10 # PDから取るベクトルの数
+        #self.numTokensList = [1024, 2048, 4096]
+        self.numTokensList = [1024]
+        #self.topN = 10 # PDから取るベクトルの数
+        self.topN = 100 # PDから取るベクトルの数
 
         # ディレクトリ情報から自動生成したい
         self.cl = [0, 0, 0, 0, 0,
@@ -166,6 +171,14 @@ class rwkv():
             ]
 
     def getCacheKey(self, keyName, tokenizer, targetFile, numTokens, getEmbFunc, simFunc):
+        """
+        keyName: 識別するための名前
+        tokenizer: 使ったトークナイザ
+        targetFile: ドキュメントのファイル名
+        numTokens: ドキュメント先頭からのトークン数
+        getEmbFunc: 埋め込みベクトル計算関数
+        simFunc: 類似度計算関数
+        """
         key = ""
         if tokenizer is not None:
             key += f":tokenizer={tokenizer.__class__.__name__}"
@@ -183,9 +196,9 @@ class rwkv():
     
     def setDb(self, key, val):
         keyval = f"{self.key_prefix}:{key}"
-        
+        logger.info(f"key={keyval}")
         self.db[keyval] = val
-        self.db.sync()
+        #self.db.sync()
     def getDb(self, key):
         keyval = f"{self.key_prefix}:{key}"
         return self.db.get(keyval)
@@ -194,6 +207,7 @@ class rwkv():
         #global model_tokens, model_state
         model_tokens = []
         model_state = None
+        states = []
         #logger.debug(f"input tokens={tokens}")
         tokens = [int(x) for x in tokens]
         #logger.debug(f"tokens={tokens}")
@@ -204,6 +218,7 @@ class rwkv():
                 tokens[: self.CHUNK_LEN], model_state
             )
             tokens = tokens[self.CHUNK_LEN :]
+            states.append(model_state)
         END_OF_LINE = 187
         out[END_OF_LINE] += newline_adj  # adjust \n probability
         
@@ -217,14 +232,37 @@ class rwkv():
             out[model_tokens[-1]] = -999999999
         end = time.time()
         logger.info(f"run_rnn elapsed = {end - start}")
-        return out
+        #return out
+        logger.debug(f"out={out}")
+        #logger.debug(f"states={states}")
+        #return states
+        #logger.debug(f"len(model_states)={len(model_state)}")
+        #for i, state in enumerate(model_state):
+        #    logger.debug(f"model_states[{i}]={model_state[i]}")
+        #    logger.debug(f"model_states[{i}].shape={model_state[i].shape}")
+        #model_state = torch.cat(model_state)
+        #logger.debug(f"model_states={model_state}")
+        #return model_state
+        final_layer_state = torch.cat([model_state[-5], model_state[-4],
+                                      model_state[-3], model_state[-2],
+                                       model_state[-1]])
+        np_state=[i.detach().cpu().numpy() for i in model_state]
+        np_state=np.concatenate(np_state, axis=0)
+        logger.debug(f"final_layer_states={final_layer_state}")
+        logger.debug(f"final_layer_states.shape={final_layer_state.shape}")
+        logger.debug(f"np_state={np_state}")
+        logger.debug(f"np_state.shape={np_state.shape}")
+        return final_layer_state
+        #return np_state
+        
     def encoding(self, text):
         enc = self.tokenizer.encode(text)
         tokenIds = enc.ids
         tokens = enc.tokens
-        logger.debug(f"token Ids={tokenIds}")
-        logger.debug(f"tokens={tokens}")
-        return tokenIds
+        logger.debug(f"token Ids[0:30]={tokenIds[0:30]}")
+        logger.debug(f"tokens[0:30]={tokens[0:30]}")
+        #return tokenIds
+        return enc
 
     def removeGutenbergComments(self, text):
         start_line = "START OF THE PROJECT GUTENBERG EBOOK"
@@ -248,22 +286,31 @@ class rwkv():
 
     
     def getRwkvEmbeddings(self, file, numTokens):
-        logger.info(f"file={file}")
+        """
+        file: io.TextIOWrapper
+        """
+        logger.debug(f"file={file}")
         text = file.read()
         file.seek(0)
         logger.debug(f"raw text={text[0:200]}")
         text = self.removeGutenbergComments(text)
         logger.debug(f"ETLed text={text[0:200]}")
         #embeddign = rwkv_embeddings(text)
-        tokens = self.encoding(text)[:numTokens]
-        logger.debug(f"tokens={tokens}")
+        enc = self.encoding(text)
+        logger.info(f"total tokens = {len(enc.ids)}")
+        tokens = enc.ids[:numTokens]
+        logger.info(f"total tokens = {len(enc.ids)}")
+        logger.info(f"splitted tokens = {len(tokens)}")        
+        #logger.info(f"all tokens={enc.tokens[:numTokens]}")
+        #logger.info(f"splitted all tokens={enc.tokens[:numTokens]}")
+        logger.debug(f"tokens[0:30]={tokens[0:30]}")
         ## key = f"{file.name}:tokens={numTokens}:rwkvemb" # old
         #key = self.getCacheKey("rwkvemb", None, file, numTokens, None, None)
         key = self.getCacheKey("rwkvemb", self.tokenizer, file, numTokens, None, None)
         val = self.getDb(key)
         if self.enable_rwkvemb_cache:
-            if val == None:
-                logger.info(f"getDB({key}) is None. Rebuild Cache")
+            if val is None:
+                logger.debug(f"getDB({key}) is None. Rebuild Cache")
                 if hasattr(self, "model"):
                     embeddings = self.run_rnn(tokens)
                 else:
@@ -273,9 +320,9 @@ class rwkv():
                 val = embeddings
                 #print(embeddings[:30])
             else:
-                logger.info(f"getDB({key}) found the cache value")
+                logger.debug(f"getDB({key}) found the cache value")
         else:
-            logger.info(f"Cache access is disabled")
+            logger.debug(f"Cache access is disabled")
             embeddings = self.run_rnn(tokens)
             val = embeddings
         logger.debug(f"rwkv embedding shape={val.shape}")
@@ -286,21 +333,47 @@ class rwkv():
         key = self.getCacheKey("swemb", None, file, numTokens, None, None)
         val = self.getDb(key)
         #logging.info(f"sliding window cache={val}")
-        if val is None or self.enable_swemb_cache is False:
-            logger.debug(f"getDB({key}) is None. Rebuild Cache")
+        if self.enable_swemb_cache:
+            if val is None:
+                logger.debug(f"getDB({key}) is None. Rebuild Cache")
+                rwkv_emb = self.getRwkvEmbeddings(file, numTokens)
+                logger.debug(f"input rwkv emg shape={rwkv_emb.shape}")
+                if hasattr(self, "model"):
+                    sw_embeddings = self.sw_embedder.fit_transform(rwkv_emb.reshape(1, -1).cpu())
+                    sw_embeddings = sw_embeddings[0, :, :]
+                else:
+                    logger.error("LLM model was not loaded. Cannot continue")
+                    raise NameError("LLM model was not loaded. Cannot continue")
+                logger.debug(f"set key={key}")
+                self.setDb(key, sw_embeddings)
+                val = sw_embeddings
+            else:
+                logger.debug(f"SW embedding cache found")
+                logger.info(f"getDB({key}) found the cache value")
+        else:
+            logger.info(f"Cache access is disabled")
             rwkv_emb = self.getRwkvEmbeddings(file, numTokens)
             logger.debug(f"input rwkv emg shape={rwkv_emb.shape}")
-            sw_embeddings = self.sw_embedder.fit_transform(rwkv_emb.reshape(1, -1).cpu())
-            sw_embeddings = sw_embeddings[0, :, :]
+            if hasattr(self, "model"):
+                if type(rwkv_emb).__name__ == "Tensor":
+                    sw_embeddings = self.sw_embedder.fit_transform(rwkv_emb.reshape(1, -1).cpu())
+                else:
+                    sw_embeddings = self.sw_embedder.fit_transform(rwkv_emb.reshape(1, -1))
+                sw_embeddings = sw_embeddings[0, :, :]
+            else:
+                logger.error("LLM model was not loaded. Cannot continue")
+                raise NameError("LLM model was not loaded. Cannot continue")
             logger.debug(f"set key={key}")
             self.setDb(key, sw_embeddings)
-            
             val = sw_embeddings
-        else:
-            logger.debug(f"SW embedding cache found")
+
+            
         logger.debug(f"sliding window embedding shape={val.shape}")
         return val
     def getHeadPersistenceDiagramEmbeddings(self, file, numTokens):
+        """
+        getPersistenceDiagramEmbeddingsで得た埋め込みの，
+        """
         emb = self.getPersistenceDiagramEmbeddings(file, numTokens) # [2, n]
         lifeTime = emb[1, :] - emb[0, :]
         #print("emb=", emb)
@@ -315,7 +388,11 @@ class rwkv():
         sorted_lifeTime = lifeTime[indices]
         #print("sorted lifeTime=", sorted_lifeTime)
         sorted_emb = emb[:, indices]
-        #print("sorted embeddings=", sorted_emb)
+        logger.debug(f"sorted embeddings={sorted_emb}")
+        # x軸でソートしなおしてベクトルの順序（？）をもとに戻す
+        indices = np.argsort(sorted_emb[0, :])
+        sorted_emb = sorted_emb[:, indices]/1000
+        logger.debug(f"re-sorted embeddings={sorted_emb}")        
         # 最後に，[2, n]のベクトル群を1次元に変換する
         sorted_emb = sorted_emb.reshape(sorted_emb.shape[0]*sorted_emb.shape[1])
         #print("reshaped embeddings=", sorted_emb)
@@ -325,6 +402,9 @@ class rwkv():
 
     # 1次元のPDの2次元ベクトル列をnumpyで返す
     def getPersistenceDiagramEmbeddings(self, file, numTokens):
+        """
+        PDの2次元ベクトル列をnumpyで返す
+        """
         # key = f"{file.name}:tokens={numTokens}:pdemb" # old
         #key = self.getCacheKey("pdemb", None, file, numTokens, None, None)
         key = self.getCacheKey("pdemb", self.tokenizer, file, numTokens, None, None)
@@ -332,7 +412,7 @@ class rwkv():
         #logger.info(f"sliding window cache={val}")
         if self.enable_pdemb_cache:
             if val is None:
-                logger.debug(f"getDB({key}) is None. Rebuild Cache")
+                logger.info(f"getDB({key}) is None. Rebuild Cache")
                 sw_emb = self.getSlidingWindowEmbeddings(file, numTokens)
                 logger.debug(f"input sw emg shape={sw_emb.shape}")
                 hc.PDList.from_alpha_filtration(sw_emb, 
@@ -347,7 +427,7 @@ class rwkv():
 
                 val = pd_embeddings
             else:
-                logger.debug(f"PD embedding cache({key}) found")
+                logger.info(f"PD embedding cache({key}) found")
         else:
             logger.info(f"Cache access is disabled")
             sw_emb = self.getSlidingWindowEmbeddings(file, numTokens)
@@ -359,8 +439,15 @@ class rwkv():
             pd_embeddings = np.array(pd1.birth_death_times())
             val = pd_embeddings            
         logger.debug(f"Persistence Diagram embedding shape={val.shape}")
+        logger.debug(f"Persistence Diagram embedding[0:30]={val[0:30]}")
         return val
 
+    def getPersistenceDiagramEmbeddings1d(self, file, numTokens):
+        emb = self.getPersistenceDiagramEmbeddings(file, numTokens)
+        logger.debug(f"emb shape={emb.shape}")
+        emb1d = emb.reshape(1, -1).flatten()
+        logger.debug(f"emb1d shape={emb1d.shape}")
+        return emb1d
     # キャッシュは全部ここで管理したい
     # 言語モデルのベクトル
     # Sliding Window埋め込み
@@ -388,9 +475,18 @@ class rwkv():
         ### Persistence Diagram
         pd_emb = self.getPersistenceDiagramEmbeddings(file, numTokens)
 
-        self.db.sync()
+        #self.db.sync()
         return pd_emb
 
+    def describeEmbeddings(self, emb):
+        """
+        埋め込みベクトルの統計量を出力する
+        """
+        print(f"shape={emb.shape}")
+        print(f"head[0:10]={emb[0:10]}")
+        desc = pd.DataFrame(emb.cpu().numpy()).describe()
+        print(f"describe={desc}")
+        print(f"mean={desc.loc['mean'].iloc[0]}")
             
     def CosSim(self, list1, list2):
         #print(type(list1).__name__)
@@ -406,7 +502,7 @@ class rwkv():
             fip = np.dot(f.ravel(), g.ravel())
         return fip
     def JFIP(self, f, g):
-        print(type(f).__name__)
+        #print(type(f).__name__)
         if type(f).__name__ == "Tensor":
             f = torch.cov(f)
             g = torch.cov(g)
@@ -428,29 +524,44 @@ class rwkv():
         sigma = 3.0
         kernel_func = lambda x: np.exp(-x**2 / (2 * sigma**2))
         if type(list1).__name__ == "Tensor":
+            logger.info("##############################################################")
             sim = cos_sim(list1.reshape(1, -1), list2.reshape(1, -1)).item()
         elif type(list1).__name__ == "list" or type(list1).__name__ == "ndarray":
+            logger.info(f"type={type(list1).__name__}")
             list1 = list1.reshape(2, -1)
             list2 = list2.reshape(2, -1)
+            #list1 = self.normalize(list1)
+            #list2 = self.normalize(list2)
             pd1 = hc.PD.from_birth_death(1, list1[0, :], list1[1, :])
             pd2 = hc.PD.from_birth_death(1, list2[0, :], list2[1, :])
             dis = hc.distance.bottleneck(pd1, pd2)
         sim = kernel_func(dis)
         return sim
 
+    def normalize(self, list):
+        """
+        input: [[x1, x2...], [y1, y2, ...]]
+        """
+        min_vals = np.array([np.min(list, axis=1)])
+        max_vals = np.max(list, axis=1)
+        normalized = (list - min_vals.T) / (max_vals - min_vals).T
+        return normalized
+    
     def simMatrixPlot(self, fig, ax, matrix):
 
         ax.invert_yaxis()
         #cax=ax.imshow(matrix, cmap="Paired", origin="lower")
+        #cax=ax.imshow(matrix, cmap="viridis", origin="upper", vmin=0, vmax=1)
         cax=ax.imshow(matrix, cmap="viridis", origin="upper")
         cbar = fig.colorbar(cax)
 
 
     def all_simMatrixPlot(self):
-        fig = plt.figure(figsize=(10, 6))
-        fig.subplots_adjust(hspace=0.9, wspace=0.2)
-        fig.tight_layout(rect=[0,0,1,0.96])
-        max_cols = 4 # 論文の図から
+        fig = plt.figure(figsize=(10, 10))
+        #fig.subplots_adjust(hspace=0.9, wspace=0.2)
+        #fig.tight_layout(rect=[0, 0, 2,0.96])
+        #max_cols = 4 # 論文の図から
+        max_cols = 2 # デバグのため大きく表示したい
         max_rows = 4 # 縦は定めなくてどんどん増えてもいいんだけど，subplotの仕様上仕方がない
         embFuncList = [self.getRwkvEmbeddings, self.getHeadPersistenceDiagramEmbeddings]
         simFuncList = [self.CosSim, self.JFIP, self.Bottleneck]
@@ -529,16 +640,6 @@ class rwkv():
             ax.scatter(pd_emb[0], pd_emb[1])
             ax.set_title(f"file={file}, numTokens={numTokens}")
         return ax
-    def pd_subplot(self, fig, file, numTokens, row, column, seq):
-        logger.debug(f"row={row}, column={column}")
-        ax = None
-        ### Visualize
-        if self.enable_pdemb_visualize is True:
-            pd_emb = self.getPersistenceDiagramEmbeddings(file, numTokens)
-            ax = fig.add_subplot(row, column, seq)
-            ax.scatter(pd_emb[0], pd_emb[1])
-            ax.set_title(textwrap.fill(f"file={file.name}, numTokens={numTokens}", 20), fontsize=8, wrap=True)
-        return ax
 
     def count_source_files(self):
         iter = SourceFileIterator(self.data_top_dir, self.data_subdirs, self.numTokensList)
@@ -561,7 +662,8 @@ class rwkv():
         max_cols = len(self.numTokensList)
         out = next(iter, None)
         count = 1
-        fig = plt.figure(figsize=[10,20])
+        fig = plt.figure(figsize=[10,100])
+        fig.subplots_adjust(hspace=0.5)
         while out:
             logger.info(out)
             indexed_file = out[0]
@@ -577,9 +679,21 @@ class rwkv():
             count += 1
             out = next(iter, None)
 
+    def pd_subplot(self, fig, file, numTokens, row, column, seq):
+        logger.debug(f"row={row}, column={column}")
+        ax = None
+        ### Visualize
+        if self.enable_pdemb_visualize is True:
+            #pd_emb = self.getPersistenceDiagramEmbeddings(file, numTokens)
+            pd_emb = self.getHeadPersistenceDiagramEmbeddings(file, numTokens).reshape(2, -1)
+            ax = fig.add_subplot(row, column, seq)
+            ax.scatter(pd_emb[0], pd_emb[1])
+            ax.set_title(textwrap.fill(f"file={file.name}, numTokens={numTokens}", 20), fontsize=8, wrap=True)
+        return ax
+
     # get embeddings from the file descriptor of the output of the SourceFileIterator
     def __getEmbeddingsFromFD(self, fd, getEmbFunc):
-        print("fd=", fd)
+        logger.debug(f"fd={fd}")
         indexed_file = fd[0]
         file_index = indexed_file[0]
         file = indexed_file[1]            
@@ -590,30 +704,34 @@ class rwkv():
         with open(file, "r", encoding="utf-8") as f:
             #rwkv_emb1 = self.getRwkvEmbeddings(f1, numTokens1)
             emb = getEmbFunc(f, numTokens)
+        logger.debug(f"emb={emb}")
         return emb
 
-    """
-        getEmbFunc: getEwkvEmbeddings, getHeadPersistenceDiagramEmbeddings
-        simFUnc: getCosineSimilarity, JFIP, Bottleneck
-    """        
     def simMat(self, getEmbFunc, simFunc, numTokens):
+        """
+            getEmbFunc: getEwkvEmbeddings, getHeadPersistenceDiagramEmbeddings
+            simFUnc: getCosineSimilarity, JFIP, Bottleneck
+        """        
         logger.info(f"embedding={getEmbFunc.__name__},"
                     f"similarity={simFunc.__name__},"
                     f" tokens={numTokens}")
         # key = f"{getEmbFunc.__name__}:{simFunc.__name__}:tokens={numTokens}:simMat" # old
         key = self.getCacheKey("rwkvemb", None, None, numTokens, getEmbFunc, simFunc)
-        print("key=", key)
+        logger.debug(f"cache key={key}")
         val = self.getDb(key)
         if val is None or self.enable_simmat_cache is False:
-            logger.debug(f"simMat cache not found")
+            logger.info(f"simMat cache not found")
             simMat = self.getSimMatWithoutCache(getEmbFunc, simFunc, numTokens)
             self.setDb(key, simMat)
             val = simMat
         else:
-            logger.debug(f"simMat cache found")
+            logger.info(f"simMat cache found")
         return val
     # 類似度の詳細情報を得る
     def getSimDescWithoutCache(self, getEmbFunc, simFunc, numTokens):
+        """
+        self.data_sub_dir, self.data_subdirsの全ファイルを対象に類似度行列を計算する
+        """
         #iter1 = SourceFileIterator(self.data_top_dir, self.data_subdirs, self.numTokensList)
         iter1 = SourceFileIterator(self.data_top_dir, self.data_subdirs, [numTokens])
         logger.debug(f"subdirs={self.data_subdirs}")
@@ -658,19 +776,20 @@ class rwkv():
         fig = plt.figure()
         simMatList = []
         while out1:
-            logger.info(out1)
+            logger.debug(f"target1={out1}")
             rwkv_emb1 = self.__getEmbeddingsFromFD(out1, getEmbFunc)
 
             #iter2 = SourceFileIterator(self.data_top_dir, self.data_subdirs, self.numTokensList)
             iter2 = SourceFileIterator(self.data_top_dir, self.data_subdirs, [numTokens])
             out2 = next(iter2, None)
+
             while out2:
-                logger.info(out2)
-                    #rwkv_emb2 = self.getRwkvEmbeddings(f2, numTokens2)
+                logger.debug(f"target2={out2}")            
+                #rwkv_emb2 = self.getRwkvEmbeddings(f2, numTokens2)
                 rwkv_emb2 = self.__getEmbeddingsFromFD(out2, getEmbFunc)
                 #sim = self.getCosineSimilarity(rwkv_emb1, rwkv_emb2)
                 sim = simFunc(rwkv_emb1, rwkv_emb2)
-                logger.info(f"{out1},{out2}, sim={sim}")
+                logger.debug(f"{out1}({rwkv_emb1};{rwkv_emb1.shape}),{out2}({rwkv_emb2};{rwkv_emb2.shape}), sim={sim}")
                 out2 = next(iter2, None)
                 simMatList.append(sim)
                 count += 1
@@ -685,6 +804,7 @@ class rwkv():
           or type(item).__name__ == "int"\
           or type(item).__name__ == "float64":
             simMat = np.array(simMatList).reshape(int(math.sqrt(count)), int(math.sqrt(count)))
+        logger.debug(f"simMat={simMat}")
         return simMat
 
             
