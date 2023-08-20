@@ -11,6 +11,7 @@ import sys
 import os
 from source_file_iterator import SourceFileIterator
 import matplotlib.pyplot as plt
+import hashlib
 
 np.set_printoptions(suppress=True)
 
@@ -88,7 +89,7 @@ class TestRwkvRunner(unittest.TestCase):
             self.assertEqual(vec.shape, torch.Size([2*r.topN]))
     def test_getEmbeddingDataset(self):
         # もとのテキストデータにETL加えて全部作り直すようなとき
-        r.getEmbeddingDataset(cache_rebuild = False)
+        r.getEmbeddingDataset(cache_rebuild = True)
     def test_CosSim(self):
         sim = r.CosSim([1, 2], [2, 1])
         self.assertEqual(sim, 0.8)
@@ -111,12 +112,13 @@ class TestRwkvRunner(unittest.TestCase):
         np.testing.assert_almost_equal(sim, 0.2195, decimal=4)
 
     def test_Bottleneck(self):
-        sim1 = r.Bottleneck(np.array([[1, 2], [1, 3]]), np.array([[1, 2], [1, 3]]))
+        r.enable_bottleneck_cache = True
+        sim1 = r.BottleneckSim(np.array([[1, 2], [1, 3]]), np.array([[1, 2], [1, 3]]))
         print("most high", sim1)
         self.assertEqual(sim1, 1)
-        sim2 = r.Bottleneck(np.array([[1, 2], [1, 3]]), np.array([[1, 2], [1, 4]]))
+        sim2 = r.BottleneckSim(np.array([[1, 2], [1, 3]]), np.array([[1, 2], [1, 4]]))
         print("middle", sim2)
-        sim3 = r.Bottleneck(np.array([[1, 2], [1, 3]]), np.array([[1, 2], [1, 5]]))
+        sim3 = r.BottleneckSim(np.array([[1, 2], [1, 3]]), np.array([[1, 2], [1, 5]]))
         print("most low", sim3)
         #np.testing.assert_almost_equal(sim, 0.3246, decimal=4)
         #np.testing.assert_almost_equal(sim2 - sim1, 0.3246, decimal=4)
@@ -163,8 +165,9 @@ class TestRwkvRunner(unittest.TestCase):
 
     def test_PDsimMatByBottleneck(self):
         r.enable_simmat_cache = False
-        sim = r.simMat(r.getHeadPersistenceDiagramEmbeddings, r.Bottleneck, 2048)
+        sim = r.simMat(r.getHeadPersistenceDiagramEmbeddings, r.BottleneckSim, 2048)
         print(sim)
+        
     def test_getSimilarityMatrixDataset(self):
         #r.getSimilarityMatrixDataset(cache = False)
         r.getSimilarityMatrixDataset()
@@ -421,7 +424,7 @@ class TestRwkvRunner(unittest.TestCase):
         for i in all_emb:
             for j in all_emb:
                 sim = r.CosSim(i, j)
-                #sim = r.Bottleneck(i, j)
+                #sim = r.BottleneckSim(i, j)
                 simMat.append(sim)
         print(simMat)
         simMat = torch.tensor(simMat).reshape(len(all_emb), len(all_emb))
@@ -468,6 +471,96 @@ class TestRwkvRunner(unittest.TestCase):
         y = r.normalize(x)
         np.testing.assert_array_equal(y, np.array([[0, 0.5, 1], [0, 0.5, 1]]))
 
+    def test_regularize(self):
+        x = np.array([[0, 1, 2], [3, 5, 7]])
+        y = r.regularize(x)
+        np.testing.assert_array_equal(y, np.array([[-1.224745,  0.,  1.224745],
+                                                   [-1.224745,  0.,  1.224745]]))
+
+    def test_hash(self):
+        numTokens = 1024
+        dirname = "test_embedding_tmp"
+        #getEmbeddings = r.getRwkvEmbeddings
+        getEmbeddings = r.getHeadPersistenceDiagramEmbeddings
+        #r.enable_rwkvemb_cache = False
+        #r.enable_swemb_cache = False
+        #r.enable_pdemb_cache = False
+        filename1 = "data/carroll/Alice's Adventures in Wonderland by Lewis Carroll"
+        filename2 = 'data/einstein/Relativity: The Special and General Theory by Albert Einstein'
+        filename3 = 'data/lovecraft/The Dunwich Horror by H. P. Lovecraft'
+        filename4 = 'data/carroll/Through the Looking-Glass by Lewis Carroll'
+        with open(filename1, "r", encoding="utf-8") as f:
+            emb1 = getEmbeddings(f, numTokens)
+        with open(filename2, "r", encoding="utf-8") as f:
+            emb2 = getEmbeddings(f, numTokens)            
+        with open(filename3, "r", encoding="utf-8") as f:
+            emb3 = getEmbeddings(f, numTokens)
+        with open(filename4, "r", encoding="utf-8") as f:
+            emb4 = getEmbeddings(f, numTokens)
+        r.hash_algorithm.update(emb1.tobytes())
+        hash1 = r.hash_algorithm.hexdigest()
+        r.hash_algorithm.update(emb2.tobytes())
+        hash2 = r.hash_algorithm.hexdigest()
+        print(hash1)
+        print(hash2)
+
+    def test_getSimMatWithoutCache(self):
+        getEmbFunc = r.getHeadPersistenceDiagramEmbeddings
+        simFunc = r.BottleneckSim
+        numTokens = 1024
+        simMat = r.getSimMatWithoutCache(getEmbFunc, simFunc, numTokens)
+        print("simMat=", simMat)
+
+    def test_cache(self):
+
+        #keys = r.listCache(None, r.getSlidingWindowEmbeddings, None, 1024)
+        keys = r.listCache(None, r.getSlidingWindowEmbeddings, None, None)
+        logger.info(f"hit keys={keys}")
+
+        
+        sys.exit()
+        
+        key1 = r.getCacheKey("test", None, None, 1024,
+                             r.getRwkvEmbeddings, r.CosSim)
+        key2 = r.getCacheKey("test", None, None, 1024,
+                             r.getRwkvEmbeddings, r.BottleneckSim)
+        logger.info(f"test key={key1}")
+        val1 = "dummy for test1"
+        val2 = "dummy for test2"
+
+        # test 1 全部消す
+        r.setDb(key1, val1)
+        r.setDb(key2, val2)
+        self.assertEqual(r.getDb(key1), val1)
+        self.assertEqual(r.getDb(key2), val2)
+
+        keys = r.listCache("test", r.getRwkvEmbeddings, None, 1024)
+        self.assertEqual(len(keys), 2)
+        self.assertEqual(keys, ['rwkv:RWKV-4-Raven-3B-v11-Eng49%-Chn49%-Jpn1%-Other1%-20230429-ctx4096.pth::getEmb=getRwkvEmbeddings:simFunc=BottleneckSim:tokens=1024:test', 'rwkv:RWKV-4-Raven-3B-v11-Eng49%-Chn49%-Jpn1%-Other1%-20230429-ctx4096.pth::getEmb=getRwkvEmbeddings:simFunc=CosSim:tokens=1024:test'])
+        c = r.deleteCache("test", r.getRwkvEmbeddings, None, 1024)
+        self.assertEqual(c, 2)
+        keys = r.listCache("test", r.getRwkvEmbeddings, None, 1024)
+        self.assertEqual(len(keys), 0)
+
+        # test2 一部消す
+        r.setDb(key1, val1)
+        r.setDb(key2, val2)
+        self.assertEqual(r.getDb(key1), val1)
+        self.assertEqual(r.getDb(key2), val2)
+
+        keys = r.listCache("test", r.getRwkvEmbeddings, None, 1024)
+        self.assertEqual(len(keys), 2)
+        self.assertEqual(keys, ['rwkv:RWKV-4-Raven-3B-v11-Eng49%-Chn49%-Jpn1%-Other1%-20230429-ctx4096.pth::getEmb=getRwkvEmbeddings:simFunc=BottleneckSim:tokens=1024:test', 'rwkv:RWKV-4-Raven-3B-v11-Eng49%-Chn49%-Jpn1%-Other1%-20230429-ctx4096.pth::getEmb=getRwkvEmbeddings:simFunc=CosSim:tokens=1024:test'])
+        keys = r.listCache("test", None, r.CosSim, 1024)
+        self.assertEqual(len(keys), 1)
+        self.assertEqual(keys, ['rwkv:RWKV-4-Raven-3B-v11-Eng49%-Chn49%-Jpn1%-Other1%-20230429-ctx4096.pth::getEmb=getRwkvEmbeddings:simFunc=CosSim:tokens=1024:test'])
+
+        c = r.deleteCache("test", None, r.CosSim, 1024)
+        self.assertEqual(c, 1)
+        keys = r.listCache("test", r.getRwkvEmbeddings, None, 1024)
+        self.assertEqual(len(keys), 1)
+        self.assertEqual(keys, ['rwkv:RWKV-4-Raven-3B-v11-Eng49%-Chn49%-Jpn1%-Other1%-20230429-ctx4096.pth::getEmb=getRwkvEmbeddings:simFunc=BottleneckSim:tokens=1024:test'])
+        
         
 if __name__ == "__main__":
     unittest.main()

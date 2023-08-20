@@ -75,8 +75,8 @@ class SourceFileIterator():
                     self.current_file = indexed_file
                     out  = (self.current_file, self.current_numTokens)
                 else: # 全部消費したので，終わり
-                    #raise StopIteration()
                     out = None
+                    raise StopIteration()
 
                     
         return out

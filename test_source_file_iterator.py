@@ -1,5 +1,6 @@
 import unittest
 from source_file_iterator import SourceFileIterator
+import os
 
 data_top_dir = "./data"
 data_sub_dirs = ["carroll", "einstein"]
@@ -37,6 +38,24 @@ class TestSourceFileIterator(unittest.TestCase):
                 print(f"2={out2}\n")
                 out2 = next(iter2)
             out1 = next(iter1)
+
+    def test_simpleiter(self):
+        text = "Hello, World"
+        tmpdir = "tmp"
+        if not os.path.exists(tmpdir):
+            os.mkdir(tmpdir)
+        tmpfilename = f"{tmpdir}/tmp.txt"
+        with open(tmpfilename, "w") as f:
+           f.write(text)
+        data_top_dir = "."
+        data_subdirs = [tmpdir]
+        numTokensList = [1024]
+        iter = SourceFileIterator(data_top_dir, data_subdirs,
+                                  numTokensList)
+        out = next(iter)
+        print(f"out={out}")
+        out = next(iter)
+        print(f"out={out}")
 
 if __name__ == "__main__":
     unittest.main()
