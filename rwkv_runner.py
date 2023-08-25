@@ -70,6 +70,7 @@ import matplotlib.pyplot as plt
 #sns.set(color_codes=True)
 #sns.set_palette(sns.color_palette("muted"))
 
+import embeddings_base
 
 import logging
 from logging import config
@@ -109,10 +110,12 @@ def getEmbFuncForMP(r, getEmbFuncName, list1, list2):
         return r.BottleneckSim(list1, list2)
 
 
-class rwkv():
+class rwkv(embeddings_base):
     
     def __init__(self, model_filename, tokenizer_filename, model_load = True):
         logger.info(f"initializing rwkv")
+        super.__init__(self, model_filename, tokenizer_filename, model_load)
+        
         self.model_filename = model_filename
         if model_load:
             self.model = RWKV(model=model_filename, strategy='cuda fp16i8')
@@ -151,50 +154,6 @@ class rwkv():
         #self.db = shelve.open(filename)
         self.db = diskcache.Cache(filename)
 
-        embedding_dimension_periodic = 3
-        #embedding_time_delay_periodic = 10
-        self.embedding_time_delay_periodic = 16
-        #self.embedding_time_delay_periodic = 20
-        stride = 1
-        self.sw_embedder = TakensEmbedding(
-            #parameters_type="fixed",
-            #n_jobs=2,
-            time_delay=self.embedding_time_delay_periodic,
-            dimension=embedding_dimension_periodic,
-            stride=stride,
-         )
-
-        # cache disableはキャッシュを使わない，にしてたけど，
-        # キャッシュから読み出さない，にしたほうが良さそうだ
-        self.enable_rwkvemb_cache = True
-        self.enable_swemb_cache = True
-        self.enable_pdemb_cache = True
-
-        self.enable_bottleneck_cache = True
-        self.enable_wasserstein_cache = True
-        self.enable_simmat_cache = True
-        self.enable_pdemb_visualize = True
-
-        self.sigma = 100
-
-        #self.pdemb_postfunc = self.identical
-        #self.pdemb_postfunc = self.normalize
-        self.pdemb_postfunc = self.scaling
-        self.scaling_const = 20
-        self.scaling_const0 = 20
-        self.data_top_dir = "./data"
-        self.data_subdirs = ["carroll", "einstein", "lovecraft"]
-        self.numTokensList = [1024, 2048, 4096, 8192, 16384]
-        #self.numTokensList = [1024]
-        #self.topN = 10 # PDから取るベクトルの数
-        self.topN = 1 # PDから取るベクトルの数
-
-        # ディレクトリ情報から自動生成したい
-        self.cl = [0, 0, 0, 0, 0,
-                   1, 1, 1, 1, 1,
-                   2, 2, 2, 2, 2]  # インデックスが属するクラスタID情報
-
-
         # Dataset作成用パラメータ
         self.datasetParameters = [
             [self.getRwkvEmbeddings, self.CosSim],
@@ -207,8 +166,7 @@ class rwkv():
              self.BottleneckSim]
             ]
 
-        # キャッシュのキーに使うハッシュ関数
-        self.hash_algorithm = hashlib.sha256
+
     def getCacheKey(self, keyName,
                   file = None,
                   embFunc = None,
@@ -774,6 +732,7 @@ class rwkv():
     def CosSim(self, list1, list2):
         #print(type(list1).__name__)
         logger.debug(f"list1.shape={list1.shape}")
+        logger.debug(f"list1={list1}, list2={list2}")        
         if type(list1).__name__ == "Tensor":
             sim = cos_sim(list1.reshape(1, -1), list2.reshape(1, -1)).item()
         elif type(list1).__name__ == "list" or type(list1).__name__ == "ndarray":
@@ -787,7 +746,8 @@ class rwkv():
         return fip
     def JFIP(self, f, g):
         #print(type(f).__name__)
-        logger.debug(f"list1.shape={f.shape}")        
+        logger.debug(f"list1.shape={f.shape}")
+        logger.debug(f"list1={f}, list2={g}")        
         if type(f).__name__ == "Tensor":
             f = torch.cov(f)
             g = torch.cov(g)
@@ -806,7 +766,8 @@ class rwkv():
     # getHeadPersistenceDiagramEmbeddingsは1次元に直しちゃう
     # これは統一するか→getEmbeddingsシリーズのIF仕様なので，戻り地は1次元で
     def Bottleneck(self, list1, list2):
-        logger.debug(f"list1.shape={list1.shape}")        
+        logger.debug(f"list1.shape={list1.shape}")
+        logger.debug(f"list1={list1}, list2={list2}")        
         start = time.time()
         if type(list1).__name__ == "Tensor":
             logger.info("##############################################################")
@@ -1196,10 +1157,8 @@ class rwkv():
     def getSimilarityFromOut(self, count, embFunc, simFunc, out1, out2):
         emb1 = self.__getEmbeddingsFromFD(out1, embFunc)
         emb2 = self.__getEmbeddingsFromFD(out2, embFunc)
-        logger.info(f"emb1={emb1}(shape={emb1.shape})")
-        logger.info(f"emb2={emb2}(shape={emb1.shape})")        
         sim = simFunc(emb1, emb2)
-        logger.info(f"sim={sim}")
+        logger.info(f"count={count}, emb1={emb1}(shape={emb1.shape}), emb2={emb2}(shape={emb1.shape}), sim={sim}")
         return (count, sim)
     
     def getSimMatWithoutCache(self, getEmbFunc, simFunc, numTokens):
@@ -1555,7 +1514,7 @@ if __name__ == "__main__":
             #pool.starmap(r.getEmbeddingsFromOut, args_list)
             end = time.time()
             logger.info(f"finished rebuilding cache. elapsed = {end - start}")
-        if args[2] == "sim": # BottleneckSimも含むはず
+        if args[2] == "sim-all": # BottleneckSimも含むはず
             logger.info(f"rebuild similarity matrix cache")
             start = time.time()
             r = rwkv(model_name, tokenizer_name, model_load = False)
@@ -1563,13 +1522,14 @@ if __name__ == "__main__":
             r.all_simMatrixPlot()
             end = time.time()
             logger.info(f"finished rebuilding cache. elapsed = {end - start}")
-        if args[2] == "sim-bottleneck":
-            logger.info(f"rebuild similarity matrix cache for BottleneckSim")
+        if args[2] == "sim":
             start = time.time()
             r = rwkv(model_name, tokenizer_name, model_load = False)
+            #simFunc = r.CosSim
+            simFunc = r.BottleneckSim
+            logger.info(f"rebuild similarity matrix cache for {simFunc}")
 
             embFunc = r.getHeadPersistenceDiagramEmbeddings
-            simFunc = r.BottleneckSim
             numTokens = 1024
             c = r.deleteCache("simmat", embFunc = embFunc,
                               simFunc = simFunc,
