@@ -1,7 +1,7 @@
 from gtda.time_series import TakensEmbedding
 import hashlib
 
-class embedding_base():
+class embeddings_base:
     def __init__(self, model_filename, tokenizer_filename, model_load = True):
         embedding_dimension_periodic = 3
         #embedding_time_delay_periodic = 10

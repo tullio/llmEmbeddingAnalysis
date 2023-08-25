@@ -70,7 +70,7 @@ import matplotlib.pyplot as plt
 #sns.set(color_codes=True)
 #sns.set_palette(sns.color_palette("muted"))
 
-import embeddings_base
+from embeddings_base import embeddings_base
 
 import logging
 from logging import config
@@ -114,7 +114,7 @@ class rwkv(embeddings_base):
     
     def __init__(self, model_filename, tokenizer_filename, model_load = True):
         logger.info(f"initializing rwkv")
-        super.__init__(self, model_filename, tokenizer_filename, model_load)
+        super().__init__(model_filename, tokenizer_filename, model_load)
         
         self.model_filename = model_filename
         if model_load:
@@ -1489,17 +1489,16 @@ if __name__ == "__main__":
             logger.info(f"rebuild rwkv embedding cache")
             start = time.time()
             r = rwkv(model_name, tokenizer_name, model_load = True)
-            c = r.deleteCache("emb", embFunc = r.getRwkvEmbeddings)
-            c = r.deleteCache("emb", embFunc = r.getSlidingWindowEmbeddings)
-            c = r.deleteCache("emb", embFunc = r.getPersistenceDiagramEmbeddings)
-            #r.getEmbeddingDataset(cache_rebuild = False)
-            r.data_subdirs = ["carroll", "einstein"]
+            #c = r.deleteCache("emb", embFunc = r.getRwkvEmbeddings)
+            #c = r.deleteCache("emb", embFunc = r.getSlidingWindowEmbeddings)
+            #c = r.deleteCache("emb", embFunc = r.getPersistenceDiagramEmbeddings)
+            r.data_subdirs = ["einstein"]
             iter = SourceFileIterator(r.data_top_dir, r.data_subdirs, r.numTokensList)
-            #pool = multiprocessing.Pool(8)
-            #args_list = []
+            pool = multiprocessing.Pool(8)
+            args_list = []
             for out in tqdm(iter):
                 print(out)
-                #args_list.append((out, True))
+                args_list.append((out, True))
                 #r.getEmbeddingsFromOut(out, cache_rebuild = True) # rwkv/sw/pd全部やる
                 indexed_file = out[0]
                 file_index = indexed_file[0]
@@ -1510,7 +1509,7 @@ if __name__ == "__main__":
                 numTokens = indexed_numTokens[1]
                 with open(file, "r", encoding="utf-8") as f:
                     r.getRwkvEmbeddings(f, numTokens)
-                
+            # RuntimeError: Tried to serialize object __torch__.rwkv.model.RWKV which does not have a __getstate__ method defined!   
             #pool.starmap(r.getEmbeddingsFromOut, args_list)
             end = time.time()
             logger.info(f"finished rebuilding cache. elapsed = {end - start}")
