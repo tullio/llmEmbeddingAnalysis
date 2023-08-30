@@ -24,16 +24,16 @@ import torch.nn as nn
 from torch.nn.functional import cosine_similarity as cos_sim
 import textwrap
 import math
-from params import params
+from params import Params
 import hashlib
-import re
+
 
 import sys
 #sys.path.append("../ChatRWKV")
 from rwkv_tokenizer import rwkv_tokenizer
 
 from transformers import PreTrainedTokenizerFast
-from tokenizers import Tokenizer
+
 
 from sklearn.manifold import TSNE
 from scipy import spatial
@@ -76,6 +76,7 @@ import logging
 from logging import config
 
 from source_file_iterator import SourceFileIterator
+from cache import Cache
 
 config.fileConfig("logging.conf", disable_existing_loggers = False)
 
@@ -121,11 +122,6 @@ class rwkv(embeddings_base):
             self.model = RWKV(model=model_filename, strategy='cuda fp16i8')
             self.pipeline = PIPELINE(self.model, tokenizer_filename) # 20B_tokenizer.json is in https://github.com/BlinkDL/ChatRWKV
 
-        #self.tokenizer = PreTrainedTokenizerFast(tokenizer_file=tokenizer_filename)
-        #self.tokenizer = Tokenizer.from_file(tokenizer_filename)
-        self.tokenizer = Tokenizer.from_file(tokenizer_filename)
-        print(self.tokenizer.__class__)
-        #self.tokenizer = rwkv_tokenizer("rwkv_vocab_v20230424.txt")
         self.AVOID_REPEAT_TOKENS = []
         self.start = time.time()
 
@@ -142,17 +138,11 @@ class rwkv(embeddings_base):
             
         self.CHUNK_LEN: int = 8192*4
         """Batch size for prompt processing."""
-
-        #self.key_prefix = self.__class__.__name__ + '_' + str(id(self)) + '_' + model_filename
-        self.key_prefix = self.__class__.__name__ + \
-            ':' + model_filename + \
-            ':' + self.tokenizer.__class__.__name__
-        print("key_prefix=", self.key_prefix)
-        #filename = "rwkv_gutenberg.db"
+        params = Params("config.toml")
         filename = params.cache_filename
         logger.info(f"cache_filename={params.cache_filename}")
-        #self.db = shelve.open(filename)
-        self.db = diskcache.Cache(filename)
+        #self.db = diskcache.Cache(filename)
+        self.db = Cache(self, filename, model_filename, self.tokenizer)
 
         # Dataset作成用パラメータ
         self.datasetParameters = [
@@ -167,70 +157,6 @@ class rwkv(embeddings_base):
             ]
 
 
-    def getCacheKey(self, keyName,
-                  file = None,
-                  embFunc = None,
-                  simFunc = None,
-                  numTokens = None,
-                  postfunc = None,
-                  list1 = None,
-                  list2 = None,
-                  comment = None):
-                    
-        """
-        keyName: 識別するための名前．基本はrequired
-        targetFile: ドキュメントのファイル名．simFuncがNoneのときはrequired
-        numTokens: ドキュメント先頭からのトークン数．postfuncがNoneならrequired
-        getEmbFunc: 埋め込みベクトル計算関数．postfuncがNoneならrequired
-        simFunc: 類似度計算関数
-
-        postfunc: simFuncのための前処理関数
-        hash1: simFuncに渡す引数のハッシュ --> hashはkey作成のためにしか使われていないからlist1でいい
-        hash2: simFuncに渡す引数のハッシュ
-
-        """
-        key = ""
-        if keyName == "emb" and embFunc == self.getHeadPersistenceDiagramEmbeddings:
-            raise ValueError("use getPersistenceDiagramEmbeddings")
-
-        if keyName == "dis" and simFunc == self.BottleneckSim:
-            raise ValueError("use Bottleneck")
-
-        if keyName == "emb":
-            key += f"{keyName}"
-            key += f":file={file.name}"
-            key += f":embFunc={embFunc.__name__}"
-            key += f":tokens={numTokens}"
-        elif keyName == "embmat":
-            key += f"{keyName}"            
-            key += f":embFunc={embFunc.__name__}"
-            key += f":simFunc={simFunc.__name__}"
-            key += f":tokens={numTokens}"
-        elif keyName == "simmat":
-            key += f"{keyName}"
-            key += f":embFunc={embFunc.__name__}"
-            key += f":simFunc={simFunc.__name__}"
-            key += f":tokens={numTokens}"
-        elif keyName == "dis":
-            key += f"{keyName}"
-            key += f":postfunc={postfunc.__name__}"
-            key += f":simFunc={simFunc.__name__}"
-            hash1 = self.hash_algorithm(list1.tobytes()).hexdigest()
-            key += f":hash1={hash1}"
-            hash2 = self.hash_algorithm(list2.tobytes()).hexdigest()
-            key += f":hash2={hash2}"
-        if comment is not None:
-            key += f":comment={comment}"
-        return key
-    
-    def setDb(self, key, val):
-        keyval = f"{self.key_prefix}:{key}"
-        logger.info(f"key={keyval}")
-        self.db[keyval] = val
-        #self.db.sync()
-    def getDb(self, key):
-        keyval = f"{self.key_prefix}:{key}"
-        return self.db.get(keyval)
     def run_rnn(self, tokens, newline_adj = 0):
         start = time.time()
         #global model_tokens, model_state
@@ -284,34 +210,6 @@ class rwkv(embeddings_base):
         return final_layer_state
         #return np_state
         
-    def encoding(self, text):
-        enc = self.tokenizer.encode(text)
-        tokenIds = enc.ids
-        tokens = enc.tokens
-        logger.debug(f"token Ids[0:30]={tokenIds[0:30]}")
-        logger.debug(f"tokens[0:30]={tokens[0:30]}")
-        #return tokenIds
-        return enc
-
-    def removeGutenbergComments(self, text):
-        start_line = "START OF THE PROJECT GUTENBERG EBOOK"
-        end_line = "END OF THE PROJECT GUTENBERG EBOOK"
-        lines = []
-
-        # 特定の文字列を含む行の範囲を抽出
-        should_extract = False
-        for line in text.split('\n'):
-            if should_extract:
-                if end_line in line:
-                    break
-                lines.append(line.strip())
-            elif start_line in line:
-                should_extract = True
-
-        if should_extract is False:
-            lines = text.split('\n')
-            
-        return '\n'.join(lines)
 
     
     def getRwkvEmbeddings(self, file, numTokens):
@@ -365,169 +263,6 @@ class rwkv(embeddings_base):
         logger.info(f"elapsed = {end - start}")
         return val
 
-    def listCache(self, keyName,
-                  file = None, # file descriptor
-                  embFunc = None, # function object
-                  simFunc = None, # function object
-                  numTokens = None, # int
-                  postfunc = None, # function object
-                  list1 = None, # numpy array
-                  list2 = None, # numpy array
-                  comment = None):
-        """
-        keyName: 識別するための名前．基本はrequired
-            - "emb"
-              emb:file={}:embFunc={}:tokens={}[:comment={}]
-            - "embmat"
-              embmat:embFunc={}:simFunc={}:tokens={}[:comment={}]
-            - "simmat"
-              simmat:embFunc={}:simFunc={}:tokens={}[:comment={}]
-            - "dis"
-              dis:postfunc={}:hash1={}:hash2={}[:comment={}]
-
-        # tokenizer: 使ったトークナイザ
-        # targetFile: ドキュメントのファイル名
-
-        # おもに埋め込みベクトル，類似度行列で使う
-
-        # 埋め込みベクトルではこう呼び出されている
-        # key = self.getCacheKey("swemb", None, file, numTokens,
-        #                       self.getSlidingWindowEmbeddings, None)
-
-        # simMatのための埋め込みベクトルリストのキャッシュを新設（2023/08/18 12:44）
-
-        # simMatではこう呼び出されている
-        # key = self.getCacheKey("rwkvemb", None, None, numTokens, getEmbFunc, simFunc)
-        numTokens: ドキュメント先頭からのトークン数
-        getEmbFunc: 埋め込みベクトル計算関数
-        simFunc: 類似度計算関数
-
-        # Bottleneckではこう呼び出されている
-        # key = f"postfunc={self.pdemb_postfunc.__name__}:simFunc={}:{hash1}:{hash2}"
-        # おもにsimFunc/距離関数で使う
-        postfunc: 距離関数のための前処理関数
-        simFunc: 距離関数: 類似度関数と距離関数が同時に使われることはないので
-        hash1: 距離関数に渡す引数のハッシュ --> hashはkey作成のためにしか使われていないからlist1でいい
-        hash2: 距離関数に渡す引数のハッシュ
-
-        # ----- 仕様
-        Noneは.*に変換される
-        """
-
-        iter = self.db.iterkeys(reverse=False)
-        substring = ""
-        if keyName == "emb":
-            substring += f"{keyName}"
-            if file is not None:
-                substring += f":file={file.name}"
-            else:
-                substring += f":[^:]*"
-            if embFunc is not None:
-                substring += f":embFunc={embFunc.__name__}"
-            else:
-                substring += f":[^:]*"
-            if numTokens is not None:
-                substring += f":tokens={numTokens}"
-            else:
-                substring += f":[^:]*"
-        elif keyName == "embmat":
-            substring += f"{keyName}"            
-            if embFunc is not None:
-                substring += f":embFunc={embFunc.__name__}"
-            else:
-                substring += f":[^:]*"
-            if simFunc is not None:
-                substring += f":simFunc={simFunc.__name__}"
-            else:
-                substring += f":[^:]*"
-            if numTokens is not None:
-                substring += f":tokens={numTokens}"
-            else:
-                substring += f":[^:]*"
-        elif keyName == "simmat":
-            substring += f"{keyName}"            
-            if embFunc is not None:
-                substring += f":embFunc={embFunc.__name__}"
-            else:
-                substring += f":[^:]*"
-            if simFunc is not None:
-                substring += f":simFunc={simFunc.__name__}"
-            else:
-                substring += f":[^:]*"
-            if numTokens is not None:
-                substring += f":tokens={numTokens}"
-            else:
-                substring += f":[^:]*"
-        elif keyName == "dis":
-            substring += f"{keyName}"            
-            if postfunc is not None:
-                substring += f":postfunc={postfunc.__name__}"
-            else:
-                substring += f":[^:]*"
-            if simFunc is not None:
-                substring += f":simFunc={simFunc.__name__}"
-            else:
-                substring += f":[^:]*"
-                
-            if list1 is not None:
-                hash1 = self.hash_algorithm(list1.tobytes()).hexdigest()
-                substring += f":hash1={hash2}"
-            else:
-                substring += f":[^:]*"
-            if list2 is not None:
-                hash2 = self.hash_algorithm(list2.tobytes()).hexdigest()
-                substring += f":hash2={hash2}"
-            else:
-                substring += f":[^:]*"
-        else:
-            raise ValueError(f"Invalid tag:{keyName}")
-        
-        hit_keys = []
-        for key in iter:
-            #logger.debug(f"target key={substring}")
-            #logger.debug(f"target record={key}")
-            #print(re.search(substring, key))
-            if re.search(substring, key):
-                hit_keys.append(key)
-        return hit_keys
-
-    def deleteCache(self, keyName,
-                  file = None, # file descriptor
-                  embFunc = None, # function object
-                  simFunc = None, # function object
-                  numTokens = None, # int
-                  postfunc = None, # function object
-                  list1 = None, # numpy array
-                  list2 = None, # numpy array
-                  comment = None):
-        """
-        Noneは.*に変換される
-        return: Counter indicating the number of deleted items
-        """
-        if keyName == "emb" and embFunc == self.getHeadPersistenceDiagramEmbeddings:
-            raise ValueError("use getPersistenceDiagramEmbeddings")
-        if keyName == "dis" and simFunc == self.BottleneckSim:
-            raise ValueError("use Bottleneck")
-        
-        keys = self.listCache(keyName,
-                              file = file,
-                              embFunc = embFunc,
-                              simFunc = simFunc,
-                              numTokens = numTokens,
-                              postfunc = postfunc,
-                              list1 = list1,
-                              list2 = list2,
-                              comment = comment)
-        count = 0
-        logger.info(f"delete target keys[0:5]={keys[0:5]}")
-        #input("OK?")
-        for key in keys:
-            logger.debug(f"deleting candidate key={key}")
-            #input("OK?")
-            if self.db.delete(key):
-                count += 1
-        logger.info(f"deleted {count} records")
-        return count
     def getSlidingWindowEmbeddings(self, file, numTokens):
         start = time.time()
         # key = f"{file.name}:tokens={numTokens}:swemb" # old
@@ -897,35 +632,6 @@ class rwkv(embeddings_base):
         logger.debug(f"sim={sim}")
         return sim        
 
-    def normalize(self, list):
-        """
-        input: [[x1, x2...], [y1, y2, ...]]
-        """
-        min_vals = np.array([np.min(list, axis=1)])
-        max_vals = np.max(list, axis=1)
-        normalized = (list - min_vals.T) / (max_vals - min_vals).T
-        return normalized
-
-    def regularize(self, list):
-        """
-        input: [[x1, x2...], [y1, y2, ...]]
-        """
-        mean_vals = np.array([np.mean(list, axis=1)])
-        std_vals = np.array([np.std(list, axis=1)])
-        regularized = (list - mean_vals.T) / std_vals.T
-        return regularized
-
-    def scaling(self, list):
-        """
-        input: [[x1, x2...], [y1, y2, ...]]
-        """
-        scaled = list / self.scaling_const
-        scaled = scaled.astype(int)
-        logger.debug(f"convert {list} to {scaled}")
-        return scaled
-    
-    def identical(self, list):
-        return list
     
     def simMatrixPlot(self, fig, ax, matrix):
 
@@ -1538,7 +1244,7 @@ if __name__ == "__main__":
             logger.info(f"finished rebuilding cache. elapsed = {end - start}")
     if args[1] == "--list-cache-all":
         r = rwkv(model_name, tokenizer_name, model_load = False)
-        keys = r.listCache("")
+        keys = r.listCache("all")
         print(keys)
     if args[1] == "--cache-volume":
         r = rwkv(model_name, tokenizer_name, model_load = False)
