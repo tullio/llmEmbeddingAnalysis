@@ -232,14 +232,14 @@ class rwkv(embeddings_base):
         #logger.info(f"splitted all tokens={enc.tokens[:numTokens]}")
         logger.debug(f"tokens[0:30]={tokens[0:30]}")
         ## key = f"{file.name}:tokens={numTokens}:rwkvemb" # old
-        #key = self.getCacheKey("rwkvemb", None, file, numTokens, None, None)
-        #key = self.getCacheKey("rwkvemb", self.tokenizer, file, numTokens,
+        #key = self.db.getCacheKey("rwkvemb", None, file, numTokens, None, None)
+        #key = self.db.getCacheKey("rwkvemb", self.tokenizer, file, numTokens,
         #                       self.getRwkvEmbeddings, None)
-        key = self.getCacheKey("emb", file = file,
+        key = self.db.getCacheKey("emb", file = file,
                                numTokens = numTokens,
                                embFunc = self.getRwkvEmbeddings
                                )
-        val = self.getDb(key)
+        val = self.db.getDb(key)
         if self.enable_rwkvemb_cache:
             if val is None:
                 logger.debug(f"getDB({key}) is None. Rebuild Cache")
@@ -249,7 +249,7 @@ class rwkv(embeddings_base):
                     logger.error("LLM model was not loaded. Cannot continue")
                     raise NameError("LLM model was not loaded. Cannot continue")
                 logger.debug(f"writing cache... key={key}")
-                self.setDb(key, embeddings)
+                self.db.setDb(key, embeddings)
                 val = embeddings
                 #print(embeddings[:30])
             else:
@@ -266,13 +266,13 @@ class rwkv(embeddings_base):
     def getSlidingWindowEmbeddings(self, file, numTokens):
         start = time.time()
         # key = f"{file.name}:tokens={numTokens}:swemb" # old
-        #key = self.getCacheKey("swemb", None, file, numTokens,
+        #key = self.db.getCacheKey("swemb", None, file, numTokens,
         #                       self.getSlidingWindowEmbeddings, None)
-        key = self.getCacheKey("emb", file = file,
+        key = self.db.getCacheKey("emb", file = file,
                                numTokens = numTokens,
                                embFunc = self.getSlidingWindowEmbeddings
                                )
-        val = self.getDb(key)
+        val = self.db.getDb(key)
         #logging.info(f"sliding window cache={val}")
         if self.enable_swemb_cache:
             if val is None:
@@ -282,7 +282,7 @@ class rwkv(embeddings_base):
                 sw_embeddings = self.sw_embedder.fit_transform(rwkv_emb.reshape(1, -1).cpu())
                 sw_embeddings = sw_embeddings[0, :, :]
                 logger.debug(f"set key={key}")
-                self.setDb(key, sw_embeddings)
+                self.db.setDb(key, sw_embeddings)
                 val = sw_embeddings
             else:
                 logger.debug(f"SW embedding cache found")
@@ -301,7 +301,7 @@ class rwkv(embeddings_base):
                 logger.error("LLM model was not loaded. Cannot continue")
                 raise NameError("LLM model was not loaded. Cannot continue")
             logger.debug(f"set key={key}")
-            self.setDb(key, sw_embeddings)
+            self.db.setDb(key, sw_embeddings)
             val = sw_embeddings
 
             
@@ -309,6 +309,9 @@ class rwkv(embeddings_base):
         end = time.time()
         logger.info(f"elapsed = {end - start}")
         return val
+
+
+
     def getHeadPersistenceDiagramEmbeddings(self, file, numTokens):
         """
         getPersistenceDiagramEmbeddingsで得た埋め込みの，
@@ -350,14 +353,14 @@ class rwkv(embeddings_base):
         """
         start = time.time()
         # key = f"{file.name}:tokens={numTokens}:pdemb" # old
-        #key = self.getCacheKey("pdemb", None, file, numTokens, None, None)
-        #key = self.getCacheKey("pdemb", self.tokenizer, file, numTokens,
+        #key = self.db.getCacheKey("pdemb", None, file, numTokens, None, None)
+        #key = self.db.getCacheKey("pdemb", self.tokenizer, file, numTokens,
         #                       self.getPersistenceDiagramEmbeddings, None)
-        key = self.getCacheKey("emb", file = file,
+        key = self.db.getCacheKey("emb", file = file,
                                numTokens = numTokens,
                                embFunc = self.getPersistenceDiagramEmbeddings
                                )
-        val = self.getDb(key)
+        val = self.db.getDb(key)
         #logger.info(f"sliding window cache={val}")
 
         ns = time.time_ns()
@@ -379,7 +382,7 @@ class rwkv(embeddings_base):
                 pd_embeddings = np.array(pd1.birth_death_times())
 
                 logger.debug(f"set key={key}")
-                self.setDb(key, pd_embeddings)
+                self.db.setDb(key, pd_embeddings)
 
                 val = pd_embeddings
             else:
@@ -418,7 +421,8 @@ class rwkv(embeddings_base):
         numTokens_index = indexed_numTokens[0]
         numTokens = indexed_numTokens[1]
         with open(file, "r", encoding="utf-8") as f:
-            self.getEmbeddings(f, numTokens, cache_rebuild)
+            emb = self.getEmbeddings(f, numTokens, cache_rebuild)
+        return emb
 
     # キャッシュは全部ここで管理したい
     # 言語モデルのベクトル
@@ -516,14 +520,14 @@ class rwkv(embeddings_base):
             hash2 = self.hash_algorithm(list2.tobytes()).hexdigest()
             logger.debug(f"list2 hash={hash2}")
             #key = f"postfunc={self.pdemb_postfunc.__name__}:bottleneck:{hash1}:{hash2}"
-            key = self.getCacheKey("dis",
+            key = self.db.getCacheKey("dis",
                                    postfunc = self.pdemb_postfunc,
                                    simFunc = self.Bottleneck,
                                    list1 = list1,
                                    list2 = list2
                                    )
 
-            val = self.getDb(key)
+            val = self.db.getDb(key)
             if self.enable_bottleneck_cache:
                 if val is None:
                     logger.debug(f"getDB({key}) is None. Rebuild Cache")
@@ -536,7 +540,7 @@ class rwkv(embeddings_base):
                     pd1 = hc.PD.from_birth_death(1, list1[0, :], list1[1, :])
                     pd2 = hc.PD.from_birth_death(1, list2[0, :], list2[1, :])
                     dis = hc.distance.bottleneck(pd1, pd2)
-                    self.setDb(key, dis)
+                    self.db.setDb(key, dis)
                     val = dis
                 else:
                     logger.debug(f"getDB({key}) found the cache value")
@@ -551,7 +555,7 @@ class rwkv(embeddings_base):
                 pd1 = hc.PD.from_birth_death(1, list1[0, :], list1[1, :])
                 pd2 = hc.PD.from_birth_death(1, list2[0, :], list2[1, :])
                 dis = hc.distance.bottleneck(pd1, pd2)
-                self.setDb(key, dis)
+                self.db.setDb(key, dis)
                 val = dis
         end = time.time()
         logger.info(f"elapsed = {end - start}")
@@ -585,7 +589,7 @@ class rwkv(embeddings_base):
             hash2 = self.hash_algorithm(list2.tobytes()).hexdigest()
             logger.debug(f"list2 hash={hash2}")
             key = f"postfunc={self.pdemb_postfunc.__name__}:wasserstein:{hash1}:{hash2}"
-            val = self.getDb(key)
+            val = self.db.getDb(key)
             if self.enable_wasserstein_cache:
                 if val is None:
                     logger.debug(f"getDB({key}) is None. Rebuild Cache")
@@ -598,7 +602,7 @@ class rwkv(embeddings_base):
                     pd1 = hc.PD.from_birth_death(1, list1[0, :], list1[1, :])
                     pd2 = hc.PD.from_birth_death(1, list2[0, :], list2[1, :])
                     dis = hc.distance.wasserstein(pd1, pd2)
-                    self.setDb(key, dis)
+                    self.db.setDb(key, dis)
                     val = dis
                 else:
                     logger.debug(f"getDB({key}) found the cache value")
@@ -613,7 +617,7 @@ class rwkv(embeddings_base):
                 pd1 = hc.PD.from_birth_death(1, list1[0, :], list1[1, :])
                 pd2 = hc.PD.from_birth_death(1, list2[0, :], list2[1, :])
                 dis = hc.distance.wasserstein(pd1, pd2)
-                self.setDb(key, dis)
+                self.db.setDb(key, dis)
                 val = dis
         end = time.time()
         logger.info(f"elapsed = {end - start}")
@@ -785,24 +789,6 @@ class rwkv(embeddings_base):
             ax.set_title(textwrap.fill(f"file={file.name}, numTokens={numTokens}", 20), fontsize=8, wrap=True)
         return ax
 
-    # get embeddings from the file descriptor of the output of the SourceFileIterator
-    def __getEmbeddingsFromFD(self, fd, getEmbFunc):
-        """
-        getEmbFunc: getRwkvEmbeddings, getHeadPersistenceDiagramEmbeddings
-        """
-        logger.debug(f"fd={fd}")
-        indexed_file = fd[0]
-        file_index = indexed_file[0]
-        file = indexed_file[1]            
-        indexed_numTokens = fd[1]
-        #print("indexed_numTokens=", indexed_numTokens1)
-        numTokens_index = indexed_numTokens[0]
-        numTokens = indexed_numTokens[1]
-        with open(file, "r", encoding="utf-8") as f:
-            #rwkv_emb1 = self.getRwkvEmbeddings(f1, numTokens1)
-            emb = getEmbFunc(f, numTokens)
-        logger.debug(f"emb={emb}")
-        return emb
 
         
     def simMat(self, getEmbFunc, simFunc, numTokens):
@@ -814,16 +800,16 @@ class rwkv(embeddings_base):
                     f"similarity={simFunc.__name__},"
                     f" tokens={numTokens}")
         # key = f"{getEmbFunc.__name__}:{simFunc.__name__}:tokens={numTokens}:simMat" # old
-        key = self.getCacheKey("simmat", embFunc = getEmbFunc,
+        key = self.db.getCacheKey("simmat", embFunc = getEmbFunc,
                                simFunc = simFunc,
                                numTokens = numTokens
                                )
         logger.debug(f"cache key={key}")
-        val = self.getDb(key)
+        val = self.db.getDb(key)
         if val is None or self.enable_simmat_cache is False:
             logger.info(f"simMat cache not found")
             simMat = self.getSimMatWithoutCache(getEmbFunc, simFunc, numTokens)
-            self.setDb(key, simMat)
+            self.db.setDb(key, simMat)
             val = simMat
         else:
             logger.info(f"simMat cache found")
@@ -842,7 +828,7 @@ class rwkv(embeddings_base):
         fig = plt.figure()
         while out1:
             #logger.info(out1)
-            emb1 = self.__getEmbeddingsFromFD(out1, getEmbFunc)
+            emb1 = self.getEmbeddingsFromFD(out1, getEmbFunc)
 
             #iter2 = SourceFileIterator(self.data_top_dir, self.data_subdirs, self.numTokensList)
             iter2 = SourceFileIterator(self.data_top_dir, self.data_subdirs, [numTokens])
@@ -850,7 +836,7 @@ class rwkv(embeddings_base):
             while out2:
                 #logger.info(out2)
                     #rwkv_emb2 = self.getRwkvEmbeddings(f2, numTokens2)
-                emb2 = self.__getEmbeddingsFromFD(out2, getEmbFunc)
+                emb2 = self.getEmbeddingsFromFD(out2, getEmbFunc)
                 #sim = self.getCosineSimilarity(rwkv_emb1, rwkv_emb2)
                 sim = simFunc(emb1, emb2)
                 logger.info(f"{out1},{out2}, sim={sim}")
@@ -861,8 +847,8 @@ class rwkv(embeddings_base):
 
 
     def getSimilarityFromOut(self, count, embFunc, simFunc, out1, out2):
-        emb1 = self.__getEmbeddingsFromFD(out1, embFunc)
-        emb2 = self.__getEmbeddingsFromFD(out2, embFunc)
+        emb1 = self.getEmbeddingsFromFD(out1, embFunc)
+        emb2 = self.getEmbeddingsFromFD(out2, embFunc)
         sim = simFunc(emb1, emb2)
         logger.info(f"count={count}, emb1={emb1}(shape={emb1.shape}), emb2={emb2}(shape={emb1.shape}), sim={sim}")
         return (count, sim)
@@ -970,13 +956,13 @@ class rwkv(embeddings_base):
              or type(item).__name__ == "float64":
             simMat = np.array(simMatList).reshape(int(math.sqrt(count)), int(math.sqrt(count)))
         logger.debug(f"simMat={simMat}")
-        key = self.getCacheKey("simmat", embFunc = getEmbFunc,
+        key = self.db.getCacheKey("simmat", embFunc = getEmbFunc,
                                simFunc = simFunc,
                                numTokens = numTokens
                                )
 
         logger.debug(f"cache key={key}")
-        self.setDb(key, simMat)
+        self.db.setDb(key, simMat)
         return simMat
 
     def get_simMatrix(self, simFunc, targetVecList):

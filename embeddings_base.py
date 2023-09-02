@@ -56,10 +56,12 @@ class embeddings_base:
         self.scaling_const0 = 20
         self.data_top_dir = "./data"
         self.data_subdirs = ["carroll", "einstein", "lovecraft"]
-        self.numTokensList = [1024, 2048, 4096, 8192, 16384]
+        #self.numTokensList = [1024, 2048, 4096, 8192, 16384]
+        # スナーク狩りが7992トークンしかない
+        self.numTokensList = [1024, 2048, 4096]
         #self.numTokensList = [1024]
-        self.topN = 1000 # PDから取るベクトルの数
-        #self.topN = 1 # PDから取るベクトルの数
+        #self.topN = 1000 # PDから取るベクトルの数
+        self.topN = 1 # PDから取るベクトルの数
 
         # ディレクトリ情報から自動生成したい
         self.cl = [0, 0, 0, 0, 0,
@@ -135,6 +137,25 @@ class embeddings_base:
         logger.debug(f"input tokens[0:30]={tokens[0:30]}")
         logger.debug(f"output string[0:30]={dec[0:30]}")
         return dec
+
+    # get embeddings from the file descriptor of the output of the SourceFileIterator
+    def getEmbeddingsFromFD(self, fd, getEmbFunc):
+        """
+        getEmbFunc: getRwkvEmbeddings, getHeadPersistenceDiagramEmbeddings
+        """
+        logger.debug(f"fd={fd}")
+        indexed_file = fd[0]
+        file_index = indexed_file[0]
+        file = indexed_file[1]            
+        indexed_numTokens = fd[1]
+        #print("indexed_numTokens=", indexed_numTokens1)
+        numTokens_index = indexed_numTokens[0]
+        numTokens = indexed_numTokens[1]
+        with open(file, "r", encoding="utf-8") as f:
+            #rwkv_emb1 = self.getRwkvEmbeddings(f1, numTokens1)
+            emb = getEmbFunc(f, numTokens)
+        logger.debug(f"emb={emb}")
+        return emb
 
     # getPersistenceDiagramEmbeddingsがbirth_death_times()で取った2次元ベクトル列を
     # 返しちゃうので，そこからPDを再現したい
