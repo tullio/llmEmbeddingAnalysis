@@ -47,13 +47,13 @@ class embeddings_base:
         self.enable_simmat_cache = True
         self.enable_pdemb_visualize = True
 
-        self.sigma = 10
+        self.sigma = 1000
 
-        #self.pdemb_postfunc = self.identical
+        self.pdemb_postfunc = self.identical
         #self.pdemb_postfunc = self.normalize
-        self.pdemb_postfunc = self.scaling
-        self.scaling_const = 20
-        self.scaling_const0 = 20
+        #self.pdemb_postfunc = self.scaling
+        self.scaling_const = 100
+        #self.scaling_const0 = 20
         self.data_top_dir = "./data"
         self.data_subdirs = ["carroll", "einstein", "lovecraft"]
         #self.numTokensList = [1024, 2048, 4096, 8192, 16384]
@@ -61,7 +61,7 @@ class embeddings_base:
         self.numTokensList = [1024, 2048, 4096]
         #self.numTokensList = [1024]
         #self.topN = 1000 # PDから取るベクトルの数
-        self.topN = 1 # PDから取るベクトルの数
+        self.topN = 10 # PDから取るベクトルの数
 
         # ディレクトリ情報から自動生成したい
         self.cl = [0, 0, 0, 0, 0,
@@ -222,7 +222,7 @@ class embeddings_base:
 
     def BottleneckSim(self, list1, list2):
         dis = self.Bottleneck(list1, list2)
-        logger.debug(f"dis={dis}")
+        logger.info(f"dis={dis}")
         sim = 0.0
 
         logger.info(f"sigma={self.sigma}")

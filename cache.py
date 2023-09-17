@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class Cache():
 
     def __init__(self, source_class, cache_filename,
-                 model_filename, tokenizer):
+                 model_filename, tokenizer, hash_algorithm):
         self.key_prefix = source_class.__class__.__name__ + \
             ':' + model_filename + \
             ':' + tokenizer.__class__.__name__
@@ -25,6 +25,7 @@ class Cache():
         #filename = "rwkv_gutenberg.db"
         #self.db = shelve.open(filename)
         self.db = diskcache.Cache(cache_filename)
+        self.hash_algorithm = hash_algorithm
 
     def getCacheKey(self, keyName,
                   file = None,
@@ -52,8 +53,8 @@ class Cache():
         #if keyName == "emb" and embFunc == self.getHeadPersistenceDiagramEmbeddings:
         #    raise ValueError("use getPersistenceDiagramEmbeddings")
 
-        if keyName == "dis" and simFunc == self.BottleneckSim:
-            raise ValueError("use Bottleneck")
+        #if keyName == "dis" and simFunc == self.BottleneckSim:
+        #    raise ValueError("use Bottleneck")
 
         if keyName == "emb":
             key += f"{keyName}"
@@ -236,8 +237,8 @@ class Cache():
         """
         #if keyName == "emb" and embFunc == self.getHeadPersistenceDiagramEmbeddings:
         #    raise ValueError("use getPersistenceDiagramEmbeddings")
-        if keyName == "dis" and simFunc == self.BottleneckSim:
-            raise ValueError("use Bottleneck")
+        #if keyName == "dis" and simFunc == self.BottleneckSim:
+        #    raise ValueError("use Bottleneck")
         
         keys = self.listCache(keyName,
                               file = file,

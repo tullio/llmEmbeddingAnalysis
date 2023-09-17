@@ -142,7 +142,7 @@ class rwkv(embeddings_base):
         filename = params.cache_filename
         logger.info(f"cache_filename={params.cache_filename}")
         #self.db = diskcache.Cache(filename)
-        self.db = Cache(self, filename, model_filename, self.tokenizer)
+        self.db = Cache(self, filename, model_filename, self.tokenizer, self.hash_algorithm)
 
         # Dataset作成用パラメータ
         self.datasetParameters = [
@@ -486,7 +486,8 @@ class rwkv(embeddings_base):
     def JFIP(self, f, g):
         #print(type(f).__name__)
         logger.debug(f"list1.shape={f.shape}")
-        logger.debug(f"list1={f}, list2={g}")        
+        logger.debug(f"list1={f}, list2={g}")
+        jfip = 0
         if type(f).__name__ == "Tensor":
             f = torch.cov(f)
             g = torch.cov(g)
@@ -560,20 +561,20 @@ class rwkv(embeddings_base):
         end = time.time()
         logger.info(f"elapsed = {end - start}")
         return val
+        """
+            def BottleneckSim(self, list1, list2):
+                dis = self.Bottleneck(list1, list2)
+                logger.info(f"dis={dis}")
+                sim = 0.0
 
-    def BottleneckSim(self, list1, list2):
-        dis = self.Bottleneck(list1, list2)
-        logger.info(f"dis={dis}")
-        sim = 0.0
+                logger.info(f"sigma={self.sigma}")
+                kernel_func = lambda x: np.exp(-x**2 / (2 * self.sigma**2))
+                sim = kernel_func(dis)
+                #sim = 1.0 - dis
 
-        logger.info(f"sigma={self.sigma}")
-        kernel_func = lambda x: np.exp(-x**2 / (2 * self.sigma**2))
-        sim = kernel_func(dis)
-        #sim = 1.0 - dis
-
-        logger.info(f"sim={sim}")
-        return sim        
-
+                logger.info(f"sim={sim}")
+                return sim        
+        """
 
     def Wasserstein(self, list1, list2):
         start = time.time()
@@ -643,17 +644,18 @@ class rwkv(embeddings_base):
         #cax=ax.imshow(matrix, cmap="Paired", origin="lower")
         #cax=ax.imshow(matrix, cmap="viridis", origin="upper", vmin=0, vmax=1)
         cax=ax.imshow(matrix, cmap="viridis", origin="upper")
-        cbar = fig.colorbar(cax)
+        cbar = fig.colorbar(cax, shrink=0.8)
 
 
     def all_simMatrixPlot(self):
-        fig = plt.figure(figsize=(10, 25))
-        fig.subplots_adjust(hspace=1.0, wspace=0.2)
+        fig = plt.figure(figsize=(10, 5)) # x, y
+        fig.subplots_adjust(hspace=0.5, wspace=0.2)
         fig.suptitle(f"topN={self.topN}, postfunc={self.pdemb_postfunc},timedelay={self.embedding_time_delay_periodic}", fontsize=10)
         fig.tight_layout(rect=[0,0,1,0.96])
         #fig.tight_layout(rect=[0, 0, 2,0.96])
         #max_cols = 4 # 論文の図から
-        max_cols = 2 # デバグのため大きく表示したい
+        #max_cols = 2 # デバグのため大きく表示したい
+        max_cols = 6 # こっちはプレゼン用
         max_rows = len(self.data_top_dir) * len(self.numTokensList) // max_cols # 縦は定めなくてどんどん増えてもいいんだけど，subplotの仕様上仕方がない
         embFuncList = [self.getRwkvEmbeddings, self.getHeadPersistenceDiagramEmbeddings]
         simFuncList = [self.CosSim, self.JFIP, self.BottleneckSim]
@@ -674,7 +676,7 @@ class rwkv(embeddings_base):
                 row = seq // max_cols + 1
                 title = f"raw:{simFunc.__name__}({numTokens})"
                 ax = fig.add_subplot(max_rows, max_cols, seq)
-                ax.set_title(title, fontsize = 8)
+                ax.set_title(title, fontsize = 4)
                 self.simMatrixPlot(fig, ax, matrix)
                 seq += 1
 
@@ -687,7 +689,7 @@ class rwkv(embeddings_base):
                 row = seq // max_cols + 1
                 title = f"TDA:{simFunc.__name__}({numTokens})"
                 ax = fig.add_subplot(max_rows, max_cols, seq)
-                ax.set_title(title, fontsize = 8)
+                ax.set_title(title, fontsize = 4)
                 self.simMatrixPlot(fig, ax, matrix)                
                 seq += 1
         
@@ -754,14 +756,17 @@ class rwkv(embeddings_base):
         print("data_subdirs=", self.data_subdirs)
         print("numTokensList=", self.numTokensList)
         #max_rows = len(self.data_subdirs) * 2
-        max_rows = self.count_source_files()
-        max_cols = len(self.numTokensList)
+        max_cols = len(self.numTokensList) * 5 # 15
+        #max_rows = int(self.count_source_files() / max_cols)
+        max_rows = 3
         out = next(iter, None)
         count = 1
-        fig = plt.figure(figsize=[10,100])
+        plt.rcParams["font.size"] = 4
+        fig = plt.figure(figsize=[10,5]) # x, y
         plt.tight_layout()
-        fig.subplots_adjust(hspace=0.5)
-        fig.suptitle(f"topN={self.topN}, postfunc={self.pdemb_postfunc},timedelay={self.embedding_time_delay_periodic}", fontsize=10)
+        plt.xlabel("x", fontsize=4)
+        plt.ylabel("x", fontsize=4)
+
         while out:
             #logger.info(out)
             indexed_file = out[0]
@@ -776,6 +781,8 @@ class rwkv(embeddings_base):
                 self.pd_subplot(fig, f, numTokens, max_rows, max_cols, count)
             count += 1
             out = next(iter, None)
+        fig.subplots_adjust(hspace=0.6)
+        fig.suptitle(f"topN={self.topN}, postfunc={self.pdemb_postfunc},timedelay={self.embedding_time_delay_periodic}", fontsize=5)
 
     def pd_subplot(self, fig, file, numTokens, row, column, seq):
         logger.debug(f"row={row}, column={column}")
@@ -786,7 +793,22 @@ class rwkv(embeddings_base):
             pd_emb = self.getHeadPersistenceDiagramEmbeddings(file, numTokens).reshape(2, -1)
             ax = fig.add_subplot(row, column, seq)
             ax.scatter(pd_emb[0], pd_emb[1])
-            ax.set_title(textwrap.fill(f"file={file.name}, numTokens={numTokens}", 20), fontsize=8, wrap=True)
+            #xmax_val = np.max(pd_emb[0])+10
+            #xmin_val = np.min(pd_emb[0])
+            #ymax_val = np.max(pd_emb[1])+10
+            #ymin_val = np.min(pd_emb[1])
+            #ax.set_xlim(xmin_val, xmax_val)
+            #ax.set_ylim(ymin_val, ymax_val)
+            #ax.plot([xmin_val, ymax_val], [xmin_val, ymax_val], transform=ax.transAxes, c="red")
+            #ax.plot(ax.get_xlim(), ax.get_ylim(), transform=ax.transAxes, c="red")
+            max_val = 9000
+            xmax_val = max_val
+            ymax_val = max_val
+            ax.set_xlim(0, xmax_val)
+            ax.set_ylim(0, ymax_val)
+            #ax.plot(ax.get_xlim(), ax.get_ylim(), c="red")
+            ax.plot([0, max_val], [0, max_val], c="red")
+            ax.set_title(textwrap.fill(f"file={file.name}, numTokens={numTokens}, max={max_val}", 40), fontsize=5, wrap=True)
         return ax
 
 
@@ -1045,22 +1067,28 @@ class rwkv(embeddings_base):
         for embedding, similarity in self.datasetParameters:
             for numTokens in self.numTokensList:
                 sim = self.simMat(embedding, similarity, numTokens)
+                logger.info(f"emb={embedding}, sim={similarity}, type(sim)={type(sim)}")
                 score = self.getScore(sim)
                 scoreArray.append(score)
         return scoreArray
 
     def hit(self, i, j, simMat):
+        #print("simmat type=", type(simMat)) # numpyとTensorが混在？
+        mean = simMat.mean()
+        #print("mean=", mean)
+        mean = 0.5
         hit = 0
-        k = self.cl[i]
-        l = self.cl[j]
-        if k == l and simMat[i, j] >= 0.5:
-            hit = 1
-        elif k == l and simMat[i, j] < 0.5:
-            hit = 0
-        elif k != l and simMat[i, j] < 0.5:
-            hit = 1
-        elif k != l and simMat[i, j] >= 0.5:
-            hit = 0
+        if i>=j:
+            k = self.cl[i]
+            l = self.cl[j]
+            if k == l and simMat[i, j] >= mean:
+                hit = 1
+            elif k == l and simMat[i, j] < mean:
+                hit = 0
+            elif k != l and simMat[i, j] < mean:
+                hit = 1
+            elif k != l  and simMat[i, j] >= mean:
+                hit = 0
         return hit
     
     def getScore(self, simMat):
@@ -1069,7 +1097,7 @@ class rwkv(embeddings_base):
         for i in range(n):
             for j in range(n):
                 score += self.hit(i, j, simMat)
-        return score/(n*n)
+        return score/(n*n-n)
     
     def close(self):
         self.db.close()
@@ -1082,20 +1110,16 @@ if __name__ == "__main__":
             start = time.time()
             r = rwkv(model_name, tokenizer_name, model_load = False)
             #r.enable_bottleneck_cache = False
-            c = r.deleteCache("dis",
+            c = r.db.deleteCache("dis",
                               simFunc = r.Bottleneck
                               )
             #r = rwkv(model_name, tokenizer_name, model_load = True)
             #r.pdemb_postfunc = r.normalize
             #r.pdemb_postfunc = r.regularize
             #r.pdemb_postfunc = r.scaling
-            # テストで一部だけ実行するとき
+
             embFunc = r.getHeadPersistenceDiagramEmbeddings
             simFunc = r.BottleneckSim
-            #for numTokens in r.numTokensList:
-            #for embFunc, simFunc in [[embFunc, simFunc]]:
-            #for numTokens in [1024]:
-            #for embFunc, simFunc in r.datasetParameters:
             for numTokens in r.numTokensList:
                 r.getSimMatWithoutCache(embFunc, simFunc, numTokens)
             end = time.time()
@@ -1209,23 +1233,38 @@ if __name__ == "__main__":
             logger.info(f"rebuild similarity matrix cache")
             start = time.time()
             r = rwkv(model_name, tokenizer_name, model_load = False)
-            c = r.deleteCache("simmat")
+            c = r.db.deleteCache("simmat")
             r.all_simMatrixPlot()
             end = time.time()
             logger.info(f"finished rebuilding cache. elapsed = {end - start}")
         if args[2] == "sim":
+            logger.info(f"rebuild all similarity matrix caches")
             start = time.time()
             r = rwkv(model_name, tokenizer_name, model_load = False)
             #simFunc = r.CosSim
-            simFunc = r.BottleneckSim
-            logger.info(f"rebuild similarity matrix cache for {simFunc}")
+            #simFunc = r.BottleneckSim
+            #logger.info(f"rebuild similarity matrix cache for {simFunc}")
 
-            embFunc = r.getHeadPersistenceDiagramEmbeddings
-            numTokens = 1024
-            c = r.deleteCache("simmat", embFunc = embFunc,
+            #embFunc = r.getHeadPersistenceDiagramEmbeddings
+            #numTokens = 1024
+            """
+            embFunc =r.getRwkvEmbeddings
+            for simFunc in [r.CosSim, r.JFIP]:
+                for numTokens in r.numTokensList:
+                    c = r.db.deleteCache("simmat", embFunc = embFunc,
                               simFunc = simFunc,
                               numTokens = numTokens)
-            r.simMat(embFunc, simFunc, numTokens)
+                    matrix = r.simMat(embFunc, simFunc, numTokens)
+            """
+            embFunc = r.getHeadPersistenceDiagramEmbeddings
+            #for simFunc in [r.CosSim, r.JFIP, r.BottleneckSim]:
+            for simFunc in [r.BottleneckSim]:
+                for numTokens in r.numTokensList:
+                    c = r.db.deleteCache("simmat", embFunc = embFunc,
+                              simFunc = simFunc,
+                              numTokens = numTokens)
+                    matrix = r.simMat(embFunc, simFunc, numTokens)
+
             end = time.time()
             logger.info(f"finished rebuilding cache. elapsed = {end - start}")
     if args[1] == "--list-cache-all":
